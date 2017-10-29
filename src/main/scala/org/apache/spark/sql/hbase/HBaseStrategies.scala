@@ -4,11 +4,10 @@ import java.util.Locale
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql._
-import org.apache.spark.sql.catalyst.catalog.{CatalogRelation, CatalogTable}
+import org.apache.spark.sql.catalyst.catalog.CatalogTable
 import org.apache.spark.sql.catalyst.expressions.{And, Attribute, AttributeMap, AttributeReference, AttributeSet, Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.planning.PhysicalOperation
 import org.apache.spark.sql.catalyst.plans.logical.{InsertIntoTable, LogicalPlan}
-import org.apache.spark.sql.catalyst.plans.physical.UnknownPartitioning
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.catalyst.{InternalRow, expressions}
 import org.apache.spark.sql.execution._
@@ -32,7 +31,7 @@ private[hbase] trait HBaseStrategies {
   object HBaseDataSource extends Strategy {
     def apply(plan: LogicalPlan): Seq[SparkPlan] = {
       plan match {
-        case PhysicalOperation(projects, filters, l@LogicalRelation(t: PrunedFilteredScan, _, _)) =>
+        case PhysicalOperation(projects, filters, l@LogicalRelation(t: PrunedFilteredScan, _, _, _)) =>
           pruneFilterProject(
             l,
             projects,
@@ -139,8 +138,11 @@ private[hbase] trait HBaseStrategies {
 
         val scan = RowDataSourceScanExec(
           projects.map(_.toAttribute),
+          projects.map(_.toAttribute).indices,
+          pushedFilters.toSet,
+          pushedFilters.toSet,
           scanBuilder(requestedColumns, candidatePredicates, pushedFilters),
-          relation.relation, UnknownPartitioning(0), metadata,
+          relation.relation,
           relation.catalogTable.map(_.identifier))
         filterCondition.map(FilterExec(_, scan)).getOrElse(scan)
       } else {
@@ -150,8 +152,11 @@ private[hbase] trait HBaseStrategies {
 
         val scan = RowDataSourceScanExec(
           requestedColumns,
+          requestedColumns.indices,
+          pushedFilters.toSet,
+          pushedFilters.toSet,
           scanBuilder(requestedColumns, candidatePredicates, pushedFilters),
-          relation.relation, UnknownPartitioning(0), metadata,
+          relation.relation,
           relation.catalogTable.map(_.identifier))
         ProjectExec(
           projects, filterCondition.map(FilterExec(_, scan)).getOrElse(scan))
@@ -161,7 +166,7 @@ private[hbase] trait HBaseStrategies {
 
   object HBaseTableScans extends Strategy {
     override def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
-      case PhysicalOperation(projectList, filter, relation: CatalogRelation) =>
+      case PhysicalOperation(projectList, filter, relation: HBaseRelation) =>
         /*  pruneFilterProject(
             projectList,
             filter,
@@ -173,7 +178,7 @@ private[hbase] trait HBaseStrategies {
     }
   }
 
-  protected def filterProject4HBase(relation: CatalogRelation, projectList: Seq[NamedExpression], filterPredicates: Seq[Expression]): SparkPlan = {
+  protected def filterProject4HBase(relation: HBaseRelation, projectList: Seq[NamedExpression], filterPredicates: Seq[Expression]): SparkPlan = {
     val attributeMap: AttributeMap[AttributeReference] = AttributeMap(relation.output.map(o => (o, o)))
     val projectSet = AttributeSet(projectList.flatMap(_.references))
 
@@ -207,7 +212,7 @@ private[hbase] trait HBaseStrategies {
   */
 object HBaseAnalysis extends Rule[LogicalPlan] {
   override def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperators {
-    case InsertIntoTable(relation: CatalogRelation, _, query, overwrite, ifNotExists)
+    case InsertIntoTable(relation: HBaseRelation, _, query, overwrite, ifNotExists)
       if isHBaseTable(relation.tableMeta) =>
       InsertIntoHBaseTable(relation.tableMeta, query, overwrite, ifNotExists)
 

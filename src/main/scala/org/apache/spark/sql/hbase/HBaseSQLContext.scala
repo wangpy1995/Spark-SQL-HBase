@@ -20,13 +20,12 @@ import org.apache.spark.sql.internal.{SessionState, SharedState, StaticSQLConf}
 import org.apache.spark.sql.{SQLContext, SparkSession}
 import org.apache.spark.{SerializableWritable, SparkContext}
 
-import scala.annotation.meta.param
 import scala.reflect.ClassTag
 
 /**
   * Created by wpy on 17-5-16.
   */
-class HBaseSQLContext private[hbase](@transient @param _hbaseSession: HBaseSession,
+class HBaseSQLContext private[hbase](@transient  _hbaseSession: HBaseSession,
                                      @transient val config: Configuration,
                                      val tmpHdfsConfgFile: String = null)
   extends SQLContext(_hbaseSession) with Logging {

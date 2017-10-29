@@ -13,7 +13,7 @@ import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding
 import org.apache.hadoop.hbase.regionserver.BloomType
 import org.apache.hadoop.hbase.security.User
 import org.apache.hadoop.hbase.util.Bytes
-import org.apache.hadoop.hbase.{HBaseConfiguration, HColumnDescriptor, HConstants, NamespaceDescriptor, TableName}
+import org.apache.hadoop.hbase.{HBaseConfiguration, HConstants, NamespaceDescriptor, TableName}
 import org.apache.spark.SparkConf
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.TableIdentifier
@@ -39,7 +39,6 @@ class HBaseClientImpl(
     with Logging {
   def this(sparkConf: SparkConf, hadoopConf: Configuration) {
     this(null, sparkConf, hadoopConf, null, null, null)
-
   }
 
   // Circular buffer to hold what hbase prints to STDOUT and ERR.  Only printed when failures occur.
@@ -189,7 +188,7 @@ class HBaseClientImpl(
     val name = s"$dbName:$tableName"
     logDebug(s"Looking up $dbName:$tableName")
     import collection.JavaConverters._
-    Option(admin.getTableDescriptor(TableName.valueOf(name))).map { t =>
+    Option(admin.getDescriptor(TableName.valueOf(name))).map { t =>
       //TODO may cause NullPointerException, take care & we'll deprecate this in the future
       val scan = new Scan()
       scan.setFilter(new PageFilter(1))
@@ -199,11 +198,12 @@ class HBaseClientImpl(
       }
       val familyName = t.getColumnFamilies.map(_.getNameAsString)
       //      val cols = desc.getColumnFamilies.flatMap(_.getNameAsString)
+      //TODO need reality schemas
       val schema = StructType(colNames.map(q => StructField(q._1 + "_" + q._2, CatalystSqlParser.parseDataType("string"))))
       //TODO should add more properties in future
       val props = {
-        val regions = admin.getTableRegions(TableName.valueOf(name))
-        val tableDesc = admin.getTableDescriptor(TableName.valueOf(name))
+        val regions = admin.getRegions(TableName.valueOf(name))
+        val tableDesc = admin.getDescriptor(TableName.valueOf(name))
         /*
         {cf1->{q1,q2,...,}}
         {cf2->{q1,q2,...,}}
@@ -293,12 +293,12 @@ class HBaseClientImpl(
         val bloom = bloomType(cf)
         val compression = zip(cf)
         val en = encoding(cf)
-        val columnFamily = new HColumnDescriptor(cf)
+        val columnFamily = ColumnFamilyDescriptorBuilder.newBuilder(Bytes.toBytes(cf))
         columnFamily.setBlockCacheEnabled(true)
         columnFamily.setDataBlockEncoding(DataBlockEncoding.valueOf(en))
         columnFamily.setCompressionType(Compression.Algorithm.valueOf(compression))
         columnFamily.setBloomFilterType(BloomType.valueOf(bloom))
-        tableDesc.addFamily(columnFamily)
+        tableDesc.addColumnFamily(columnFamily.build())
       }
     }
     val split = splitKeys.split(",").filter(_.nonEmpty).map(Bytes.toBytes)

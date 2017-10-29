@@ -9,7 +9,7 @@
     <name>Spark Project HBase</name>
     <properties>
         <sbt.project.name>hbase</sbt.project.name>
-        <hbase.version>2.0.0-SNAPSHOT</hbase.version>
+        <hbase.version>3.0.0-SNAPSHOT</hbase.version>
         <spark.version>2.3.0-SNAPSHOT</spark.version>
         <scala.version>2.11.8</scala.version>
         <scala.binary.version>2.11</scala.binary.version>
@@ -17,11 +17,6 @@
     </properties>
 
     <dependencies>
-        <dependency>
-            <groupId>org.apache.spark</groupId>
-            <artifactId>spark-core_${scala.binary.version}</artifactId>
-            <version>${spark.version}</version>
-        </dependency>
         <dependency>
             <groupId>org.apache.spark</groupId>
             <artifactId>spark-sql_${scala.binary.version}</artifactId>
@@ -33,9 +28,9 @@
             <version>${spark.version}</version>
         </dependency>
         <dependency>
-            <groupId>io.netty</groupId>
-            <artifactId>netty-all</artifactId>
-            <version>4.1.9.Final</version>
+            <groupId>org.apache.spark</groupId>
+            <artifactId>spark-hive_${scala.binary.version}</artifactId>
+            <version>${spark.version}</version>
         </dependency>
         <dependency>
             <groupId>com.google.code.findbugs</groupId>
@@ -49,7 +44,7 @@
         </dependency>
         <dependency>
             <groupId>org.apache.hbase</groupId>
-            <artifactId>hbase-client</artifactId>
+            <artifactId>hbase-backup</artifactId>
             <version>${hbase.version}</version>
         </dependency>
         <dependency>

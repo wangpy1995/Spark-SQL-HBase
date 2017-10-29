@@ -73,9 +73,9 @@ class HBaseExternalCatalog(conf: SparkConf, hadoopConf: Configuration)
     client.getTable(db, table)
   }
 
-  override def getTableOption(db: String, table: String): Option[CatalogTable] = {
+  /*override def getTableOption(db: String, table: String): Option[CatalogTable] = {
     client.getTableOption(db, table)
-  }
+  }*/
 
   override def tableExists(db: String, table: String): Boolean = {
     client.tableExists(db, table)
@@ -163,6 +163,14 @@ class HBaseExternalCatalog(conf: SparkConf, hadoopConf: Configuration)
 
   override def listFunctions(db: String, pattern: String): Seq[String] = {
     throw new UnsupportedOperationException("listFunctions")
+  }
+
+  override def alterTableStats(db: String, table: String, stats: Option[CatalogStatistics]): Unit = {
+    throw new UnsupportedOperationException("alterTableStats")
+  }
+
+  override protected def doAlterFunction(db: String, funcDefinition: CatalogFunction): Unit = {
+    throw new UnsupportedOperationException("doAlterFunction")
   }
 }
 

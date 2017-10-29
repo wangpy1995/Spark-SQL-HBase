@@ -44,7 +44,7 @@ case class CreateHBaseTableAsSelectCommand(
           Map(),
           query,
           overwrite = false,
-          ifNotExists = false)).toRdd
+          ifPartitionNotExists = false)).toRdd
     } else {
       // TODO ideally, we should get the output data ready first and then
       // add the relation into catalog, just in case of failure occurs while data
@@ -60,7 +60,7 @@ case class CreateHBaseTableAsSelectCommand(
             Map(),
             query,
             overwrite = true,
-            ifNotExists = false)).toRdd
+            ifPartitionNotExists = false)).toRdd
       } catch {
         case NonFatal(e) =>
           // drop the created table.

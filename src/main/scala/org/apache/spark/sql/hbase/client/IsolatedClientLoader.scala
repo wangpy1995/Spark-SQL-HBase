@@ -229,7 +229,7 @@ private[hbase] class IsolatedClientLoader(
             throw new ClassNotFoundException(
               s"$cnf when creating HBase client using classpath: ${execJars.mkString(", ")}\n" +
                 "Please make sure that jars for your version of hive and hadoop are included in the " +
-                s"paths passed to ${HConstants.LIB_DIR}.", e)
+                s"paths passed to ${HConstants.VERSION_FILE_NAME}.", e)
           case _ =>
             throw e
         }
