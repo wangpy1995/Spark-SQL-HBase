@@ -15,10 +15,10 @@ hbase:meta:
   table:
      state: string
   info:
-     regioninfo: string
+     regioninfo: binary
      seqnumDuringOpen: long
      server: string
-     serverstartcode: string
+     serverstartcode: timestamp
      sn: string
      state: string
 

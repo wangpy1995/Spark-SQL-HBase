@@ -83,6 +83,9 @@ case class HBaseTableScanExec(
         case StringType =>
           internalRow.update(i, UTF8String.fromBytes(v))
 
+        //convert to milli seconds
+        case TimestampType =>
+          internalRow.update(i, Bytes.toLong(v) * 1000)
         case LongType =>
           internalRow.update(i, Bytes.toLong(v))
         case IntegerType =>
@@ -113,7 +116,7 @@ case class HBaseTableScanExec(
       scan.addColumn(column_qualifier.head.getBytes, column_qualifier.last.getBytes)
     }
     scan.setCaching(1000)
-    scan.setMaxVersions()
+    scan.readAllVersions()
     if (filters.isDefined) {
       scan.setFilter(filters.get)
     }
@@ -139,7 +142,7 @@ case class HBaseTableScanExec(
     val Column = requestedAttributes.find(_.name == left.name)
     if (Column.isDefined) {
       val col_qualifier = Column.get.name.split("_", 2)
-      val filter = new SingleColumnValueFilter(Bytes.toBytes(col_qualifier.head), Bytes.toBytes(col_qualifier.last), CompareFilter.CompareOp.EQUAL, new NullComparator())
+      val filter = new SingleColumnValueFilter(Bytes.toBytes(col_qualifier.head), Bytes.toBytes(col_qualifier.last), CompareOperator.EQUAL, new NullComparator())
       filter.setFilterIfMissing(true)
       Some(new FilterList(filter))
     }
@@ -152,7 +155,7 @@ case class HBaseTableScanExec(
     val Column = requestedAttributes.find(_.name == left.name)
     if (Column.isDefined) {
       val col_qualifier = Column.get.name.split("_", 2)
-      val filter = new SingleColumnValueFilter(Bytes.toBytes(col_qualifier.head), Bytes.toBytes(col_qualifier.last), CompareFilter.CompareOp.NOT_EQUAL, new NullComparator())
+      val filter = new SingleColumnValueFilter(Bytes.toBytes(col_qualifier.head), Bytes.toBytes(col_qualifier.last), CompareOperator.NOT_EQUAL, new NullComparator())
       filter.setFilterIfMissing(true)
       Some(new FilterList(filter))
     }

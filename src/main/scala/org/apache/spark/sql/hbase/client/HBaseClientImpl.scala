@@ -2,13 +2,12 @@ package org.apache.spark.sql.hbase.client
 
 import java.io.{FileInputStream, PrintStream}
 import java.net.URI
-import java.{util => ju}
 import java.util.Properties
+import java.{util => ju}
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.hadoop.hbase.client._
-import org.apache.hadoop.hbase.filter.PageFilter
 import org.apache.hadoop.hbase.io.compress.Compression
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding
 import org.apache.hadoop.hbase.regionserver.BloomType
@@ -23,12 +22,11 @@ import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
 import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
-import org.apache.spark.sql.hbase.TableProperties
 import org.apache.spark.sql.types.{StructField, StructType}
 import org.apache.spark.util.CircularBuffer
 import org.yaml.snakeyaml.Yaml
 
-import collection.JavaConverters._
+import scala.collection.JavaConverters._
 
 /**
   * Created by wpy on 2017/5/12.
