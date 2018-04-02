@@ -211,7 +211,7 @@ private[hbase] trait HBaseStrategies {
   * `PreprocessTableInsertion`.
   */
 object HBaseAnalysis extends Rule[LogicalPlan] {
-  override def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperators {
+  override def apply(plan: LogicalPlan): LogicalPlan = plan transformUp  {
     case InsertIntoTable(relation: HBaseRelation, _, query, overwrite, ifNotExists)
       if isHBaseTable(relation.tableMeta) =>
       InsertIntoHBaseTable(relation.tableMeta, query, overwrite, ifNotExists)

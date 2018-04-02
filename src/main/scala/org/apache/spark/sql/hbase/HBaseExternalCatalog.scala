@@ -28,7 +28,7 @@ class HBaseExternalCatalog(conf: SparkConf, hadoopConf: Configuration)
     client.dropDatabase(db, ignoreIfNotExists, cascade)
   }
 
-  override def alterDatabase(dbDefinition: CatalogDatabase): Unit = {
+  override def doAlterDatabase(dbDefinition: CatalogDatabase): Unit = {
     client.alterDatabase(dbDefinition)
   }
 
@@ -63,10 +63,10 @@ class HBaseExternalCatalog(conf: SparkConf, hadoopConf: Configuration)
   override protected def doRenameTable(db: String, oldName: String, newName: String): Unit = {
   }
 
-  override def alterTable(tableDefinition: CatalogTable): Unit = {
+  override def doAlterTable(tableDefinition: CatalogTable): Unit = {
   }
 
-  override def alterTableSchema(db: String, table: String, schema: StructType): Unit = {
+  override def doAlterTableDataSchema(db: String, table: String, schema: StructType): Unit = {
   }
 
   override def getTable(db: String, table: String): CatalogTable = {
@@ -165,7 +165,7 @@ class HBaseExternalCatalog(conf: SparkConf, hadoopConf: Configuration)
     throw new UnsupportedOperationException("listFunctions")
   }
 
-  override def alterTableStats(db: String, table: String, stats: Option[CatalogStatistics]): Unit = {
+  override def doAlterTableStats(db: String, table: String, stats: Option[CatalogStatistics]): Unit = {
     throw new UnsupportedOperationException("alterTableStats")
   }
 

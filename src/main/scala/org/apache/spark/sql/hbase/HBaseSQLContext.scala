@@ -25,18 +25,16 @@ import scala.reflect.ClassTag
 /**
   * Created by wpy on 17-5-16.
   */
-class HBaseSQLContext private[hbase](@transient  _hbaseSession: HBaseSession,
+class HBaseSQLContext private[hbase](@transient _hbaseSession: HBaseSession,
                                      @transient val config: Configuration,
                                      val tmpHdfsConfgFile: String = null)
   extends SQLContext(_hbaseSession) with Logging {
-
-
   self =>
-  @transient var credentials = SparkHadoopUtil.get.getCurrentUserCredentials()
   @transient var tmpHdfsConfiguration: Configuration = config
   @transient var appliedCredentials = false
   @transient val job = Job.getInstance(config)
   TableMapReduceUtil.initCredentials(job)
+  @transient var credentials = job.getCredentials
   val broadcastedConf = _hbaseSession.sparkContext.broadcast(new SerializableWritable(config))
   val credentialsConf = _hbaseSession.sparkContext.broadcast(new SerializableWritable(job.getCredentials))
 
@@ -83,7 +81,8 @@ class HBaseSQLContext private[hbase](@transient  _hbaseSession: HBaseSession,
 
 
   def applyCreds[T]() {
-    credentials = SparkHadoopUtil.get.getCurrentUserCredentials()
+    //    credentials = SparkHadoopUtil.get.getCurrentUserCredentials()
+    credentials = null
 
     logDebug("appliedCredentials:" + appliedCredentials + ",credentials:" + credentials)
 

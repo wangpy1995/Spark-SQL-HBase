@@ -8,9 +8,9 @@
     <packaging>jar</packaging>
     <name>Spark Project HBase</name>
     <properties>
-        <sbt.project.name>hbase</sbt.project.name>
+        <sbt.project.name>spark-hbase</sbt.project.name>
         <hbase.version>3.0.0-SNAPSHOT</hbase.version>
-        <spark.version>2.3.0-SNAPSHOT</spark.version>
+        <spark.version>2.3.0</spark.version>
         <scala.version>2.11.8</scala.version>
         <scala.binary.version>2.11</scala.binary.version>
         <jsr305.version>1.3.9</jsr305.version>
@@ -57,12 +57,17 @@
             <artifactId>scala-library</artifactId>
             <version>${scala.version}</version>
         </dependency>
+
+        <!-- https://mvnrepository.com/artifact/org.yaml/snakeyaml -->
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+            <version>1.20</version>
+        </dependency>
+
     </dependencies>
 
     <build>
-        <sourceDirectory>src/main/scala</sourceDirectory>
-        <outputDirectory>target/scala-${scala.binary.version}/classes</outputDirectory>
-        <testOutputDirectory>target/scala-${scala.binary.version}/test-classes</testOutputDirectory>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -72,6 +77,12 @@
                     <target>1.8</target>
                     <source>1.8</source>
                 </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.scala-tools</groupId>
+                <artifactId>maven-scala-plugin</artifactId>
+                <version>2.15.2</version>
             </plugin>
         </plugins>
     </build>

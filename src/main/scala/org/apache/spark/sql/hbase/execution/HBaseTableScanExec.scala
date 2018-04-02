@@ -1,11 +1,13 @@
 package org.apache.spark.sql.hbase.execution
 
-import org.apache.hadoop.hbase.client.Scan
+import org.apache.hadoop.hbase.client.{Result, Scan}
 import org.apache.hadoop.hbase.filter._
 import org.apache.hadoop.hbase.util.Bytes
-import org.apache.hadoop.hbase.{CellUtil, TableName}
+import org.apache.hadoop.hbase.{Cell, CellUtil, CompareOperator, TableName}
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.catalyst.expressions.{And, Attribute, AttributeMap, AttributeReference, AttributeSet, Cast, Contains, EndsWith, EqualTo, Expression, GreaterThan, GreaterThanOrEqual, InSet, IsNotNull, IsNull, LessThan, LessThanOrEqual, Literal, NamedExpression, Or, StartsWith, UnsafeProjection}
+import org.apache.spark.sql.catalyst.expressions.aggregate.Count
+import org.apache.spark.sql.catalyst.expressions.codegen.{BufferHolder, UnsafeRowWriter}
+import org.apache.spark.sql.catalyst.expressions.{And, Attribute, AttributeMap, AttributeReference, AttributeSet, Cast, Contains, EndsWith, EqualTo, Expression, GenericInternalRow, GreaterThan, GreaterThanOrEqual, InSet, IsNotNull, IsNull, LessThan, LessThanOrEqual, Literal, NamedExpression, Or, StartsWith, UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.catalyst.{CatalystTypeConverters, InternalRow}
 import org.apache.spark.sql.execution.LeafExecNode
 import org.apache.spark.sql.execution.metric.SQLMetrics
@@ -45,17 +47,63 @@ case class HBaseTableScanExec(
 
     //TODO need more smaller scans rather than the map split
     val scan = new Scan()
+    val numOutputRows = longMetric("numOutputRows")
     val hbaseFilter = buildHBaseFilterList4Where(filter.headOption)
     addColumnFamiliesToScan(scan, hbaseFilter, filter.headOption, requestedAttributes)
     val dataTypes = schema.map(_.dataType)
     hbaseSession.sqlContext.hbaseRDD(TableName.valueOf(tableName), scan)
-      .map(_._2.rawCells()).map { cells =>
-      UnsafeProjection.create(schema)(
-        InternalRow.fromSeq(for (i <- cells.indices) yield {
-          CatalystTypeConverters.createToCatalystConverter(dataTypes(i))(UTF8String.fromBytes(CellUtil.cloneValue(cells(i))))
-        })
-      )
+      .mapPartitionsWithIndexInternal { (index, iter) =>
+        val proj = UnsafeProjection.create(schema)
+        val columnFamily = schema.map { field =>
+          val cf_q = field.name.split("_")
+          (Bytes.toBytes(cf_q.head), Bytes.toBytes(cf_q.last), field.dataType)
+        }
+        proj.initialize(index)
+        val size = schema.length
+        iter.map { result =>
+          val r = hbase2SparkRow(result._2, size, columnFamily)
+          numOutputRows += 1
+          proj(r)
+        }
+      }
+  }
+
+  type CF_Q_TYPE = (Array[Byte], Array[Byte], DataType)
+
+  def hbase2SparkRow(result: Result, size: Int, cols: Seq[CF_Q_TYPE]): InternalRow = {
+    var i = 0
+    val internalRow = new GenericInternalRow(size)
+    cols.foreach { cf =>
+      val v = result.getValue(cf._1, cf._2)
+      if (v == null) internalRow.update(i, null)
+      else cf._3 match {
+        case ByteType =>
+          internalRow.update(i, v.head)
+
+        case StringType =>
+          internalRow.update(i, UTF8String.fromBytes(v))
+
+        case LongType =>
+          internalRow.update(i, Bytes.toLong(v))
+        case IntegerType =>
+          internalRow.update(i, Bytes.toInt(v))
+        case ShortType =>
+          internalRow.update(i, Bytes.toShort(v))
+
+        case BooleanType =>
+          internalRow.update(i, Bytes.toBoolean(v))
+
+        case DoubleType =>
+          internalRow.update(i, Bytes.toDouble(v))
+        case FloatType =>
+          internalRow.update(i, Bytes.toFloat(v))
+
+        case _ =>
+          internalRow.update(i, v)
+      }
+      i += 1
     }
+    internalRow
   }
 
   //columnFamily_QualifierName <=== requestAttribute
@@ -127,15 +175,17 @@ case class HBaseTableScanExec(
     }
   }
 
-  def createSingleColumnValueFilter(left: AttributeReference, right: Literal, compareOp: CompareFilter.CompareOp, Comparable: ByteArrayComparable = null): Option[FilterList] = {
+  def createSingleColumnValueFilter(left: AttributeReference, right: Literal, compareOp: CompareOperator, comparable: ByteArrayComparable = null): Option[FilterList] = {
     val nonKeyColumn = requestedAttributes.find(_.name == left.name)
 
     if (nonKeyColumn.isDefined) {
       val column = nonKeyColumn.get.name.split("_", 2)
-      val filter = if (Comparable == null)
-        new SingleColumnValueFilter(Bytes.toBytes(column.head), Bytes.toBytes(column.last), compareOp, new BinaryComparator(getBinaryValue(right)))
-      else
-        new SingleColumnValueFilter(Bytes.toBytes(column.head), Bytes.toBytes(column.last), compareOp, Comparable)
+      val nullComparable = comparable == null
+
+      var filter = new SingleColumnValueFilter(Bytes.toBytes(column.head), Bytes.toBytes(column.last), compareOp, new BinaryComparator(getBinaryValue(right)))
+      val filter1 = new SingleColumnValueFilter(Bytes.toBytes(column.head), Bytes.toBytes(column.last), compareOp, comparable)
+
+      if (!nullComparable) filter = filter1
 
       filter.setFilterIfMissing(true)
       Some(new FilterList(filter))
@@ -184,7 +234,7 @@ case class HBaseTableScanExec(
             val filterList = new FilterList(FilterList.Operator.MUST_PASS_ONE)
             for (item <- hset) {
               val filter = new SingleColumnValueFilter(
-                Bytes.toBytes(col_qualifier.head), Bytes.toBytes(col_qualifier.last), CompareFilter.CompareOp.EQUAL,
+                Bytes.toBytes(col_qualifier.head), Bytes.toBytes(col_qualifier.last), CompareOperator.EQUAL,
                 new BinaryComparator(Bytes.toBytes(item.asInstanceOf[String])))
               filterList.addFilter(filter)
             }
@@ -195,39 +245,39 @@ case class HBaseTableScanExec(
         case IsNull(left: AttributeReference) => createNullFilter(left)
         case IsNotNull(left: AttributeReference) => createNotNullFilter(left)
         case GreaterThan(left: AttributeReference, right: Literal) =>
-          createSingleColumnValueFilter(left, right, CompareFilter.CompareOp.GREATER)
+          createSingleColumnValueFilter(left, right, CompareOperator.GREATER)
         case GreaterThan(left: Literal, right: AttributeReference) =>
-          createSingleColumnValueFilter(right, left, CompareFilter.CompareOp.GREATER)
+          createSingleColumnValueFilter(right, left, CompareOperator.GREATER)
         case GreaterThanOrEqual(left: AttributeReference, right: Literal) =>
-          createSingleColumnValueFilter(left, right, CompareFilter.CompareOp.GREATER_OR_EQUAL)
+          createSingleColumnValueFilter(left, right, CompareOperator.GREATER_OR_EQUAL)
         case GreaterThanOrEqual(left: Literal, right: AttributeReference) =>
-          createSingleColumnValueFilter(right, left, CompareFilter.CompareOp.GREATER_OR_EQUAL)
+          createSingleColumnValueFilter(right, left, CompareOperator.GREATER_OR_EQUAL)
         case EqualTo(left: AttributeReference, right: Literal) =>
-          createSingleColumnValueFilter(left, right, CompareFilter.CompareOp.EQUAL)
+          createSingleColumnValueFilter(left, right, CompareOperator.EQUAL)
         case EqualTo(left: Literal, right: AttributeReference) =>
-          createSingleColumnValueFilter(right, left, CompareFilter.CompareOp.EQUAL)
+          createSingleColumnValueFilter(right, left, CompareOperator.EQUAL)
         case EqualTo(left: Cast, right: Literal) =>
           val leftValue: AttributeReference = left.child.asInstanceOf[AttributeReference]
           val rightDecimal = BigDecimal(right.value.toString).bigDecimal
           val rightValue: Literal = Literal(rightDecimal.stripTrailingZeros().toPlainString)
-          createSingleColumnValueFilter(leftValue, rightValue, CompareFilter.CompareOp.EQUAL)
+          createSingleColumnValueFilter(leftValue, rightValue, CompareOperator.EQUAL)
         case LessThan(left: AttributeReference, right: Literal) =>
-          createSingleColumnValueFilter(left, right, CompareFilter.CompareOp.LESS)
+          createSingleColumnValueFilter(left, right, CompareOperator.LESS)
         case LessThan(left: Literal, right: AttributeReference) =>
-          createSingleColumnValueFilter(right, left, CompareFilter.CompareOp.LESS)
+          createSingleColumnValueFilter(right, left, CompareOperator.LESS)
         case LessThanOrEqual(left: AttributeReference, right: Literal) =>
-          createSingleColumnValueFilter(left, right, CompareFilter.CompareOp.LESS_OR_EQUAL)
+          createSingleColumnValueFilter(left, right, CompareOperator.LESS_OR_EQUAL)
         case LessThanOrEqual(left: Literal, right: AttributeReference) =>
-          createSingleColumnValueFilter(right, left, CompareFilter.CompareOp.LESS_OR_EQUAL)
+          createSingleColumnValueFilter(right, left, CompareOperator.LESS_OR_EQUAL)
         case StartsWith(left: AttributeReference, right: Literal) =>
           val regexStringComparator = new RegexStringComparator(".*" + right.value + "$")
-          createSingleColumnValueFilter(left, right, CompareFilter.CompareOp.EQUAL, regexStringComparator)
+          createSingleColumnValueFilter(left, right, CompareOperator.EQUAL, regexStringComparator)
         case EndsWith(left: AttributeReference, right: Literal) =>
           val binaryPrefixComparator = new BinaryPrefixComparator(Bytes.toBytes(right.value.toString))
-          createSingleColumnValueFilter(left, right, CompareFilter.CompareOp.EQUAL, binaryPrefixComparator)
+          createSingleColumnValueFilter(left, right, CompareOperator.EQUAL, binaryPrefixComparator)
         case Contains(left: AttributeReference, right: Literal) =>
           val substringComparator = new SubstringComparator(right.value.toString)
-          createSingleColumnValueFilter(left, right, CompareFilter.CompareOp.EQUAL, substringComparator)
+          createSingleColumnValueFilter(left, right, CompareOperator.EQUAL, substringComparator)
         case _ => None
       }
     }

@@ -1,8 +1,9 @@
 package org.apache.spark.sql.hbase.client
 
-import java.io.PrintStream
+import java.io.{FileInputStream, PrintStream}
 import java.net.URI
-import java.util
+import java.{util => ju}
+import java.util.Properties
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
@@ -22,8 +23,12 @@ import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
 import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
+import org.apache.spark.sql.hbase.TableProperties
 import org.apache.spark.sql.types.{StructField, StructType}
 import org.apache.spark.util.CircularBuffer
+import org.yaml.snakeyaml.Yaml
+
+import collection.JavaConverters._
 
 /**
   * Created by wpy on 2017/5/12.
@@ -40,6 +45,41 @@ class HBaseClientImpl(
   def this(sparkConf: SparkConf, hadoopConf: Configuration) {
     this(null, sparkConf, hadoopConf, null, null, null)
   }
+
+  private val schemaPath = {
+    val in = getClass.getResourceAsStream("/spark_hbase.properties")
+    val props = new Properties()
+    props.load(in)
+    val url = props.getProperty("schema.file.url")
+    in.close()
+    url
+  }
+
+  // Map[ table, Map[ family, Map[qua_name, type ] ]
+  private def getSchemaProp = {
+    val yaml = new Yaml()
+    val inputStream = new FileInputStream(schemaPath)
+    val y = yaml.load[ju.Map[String, ju.Map[String, ju.Map[String, String]]]](inputStream)
+    inputStream.close()
+    y
+  }
+
+  private def getColumnNames(schemaMap: ju.Map[String, ju.Map[String, ju.Map[String, String]]], tableName: String) = {
+    "{+\n" + schemaMap.get(tableName).asScala.map { cf =>
+      cf._1 + "-> (" + cf._2.asScala.keys.mkString(", ") +
+        ")"
+    }.mkString(";\n") + "\n}"
+  }
+
+  private def getSchema(schemaMap: ju.Map[String, ju.Map[String, ju.Map[String, String]]], tableName: String) = StructType {
+    schemaMap.get(tableName).asScala.flatMap { col =>
+      val familyName = col._1
+      col._2.asScala.map { qualifier =>
+        StructField(familyName + "_" + qualifier._1, CatalystSqlParser.parseDataType(qualifier._2))
+      }
+    }.toArray
+  }
+
 
   // Circular buffer to hold what hbase prints to STDOUT and ERR.  Only printed when failures occur.
   private val outputBuffer = new CircularBuffer()
@@ -128,15 +168,15 @@ class HBaseClientImpl(
   }
 
   override def setOut(stream: PrintStream): Unit = {
-    System.out
+    new PrintStream(outputBuffer, true, "UTF-8")
   }
 
   override def setInfo(stream: PrintStream): Unit = {
-    System.out
+    new PrintStream(outputBuffer, true, "UTF-8")
   }
 
   override def setError(stream: PrintStream): Unit = {
-    System.err
+    new PrintStream(outputBuffer, true, "UTF-8")
   }
 
   def getQualifiedTableName(tableName: String): String = {
@@ -187,19 +227,11 @@ class HBaseClientImpl(
   override def getTableOption(dbName: String, tableName: String): Option[CatalogTable] = {
     val name = s"$dbName:$tableName"
     logDebug(s"Looking up $dbName:$tableName")
-    import collection.JavaConverters._
     Option(admin.getDescriptor(TableName.valueOf(name))).map { t =>
-      //TODO may cause NullPointerException, take care & we'll deprecate this in the future
-      val scan = new Scan()
-      scan.setFilter(new PageFilter(1))
-      val colNames = connection.getTable(TableName.valueOf(name)).getScanner(scan).next().listCells().asScala.map { r =>
-        val v = r.getQualifierArray
-        (Bytes.toString(v, r.getFamilyOffset, r.getFamilyLength), Bytes.toString(v, r.getQualifierOffset, r.getQualifierLength))
-      }
-      val familyName = t.getColumnFamilies.map(_.getNameAsString)
-      //      val cols = desc.getColumnFamilies.flatMap(_.getNameAsString)
+
       //TODO need reality schemas
-      val schema = StructType(colNames.map(q => StructField(q._1 + "_" + q._2, CatalystSqlParser.parseDataType("string"))))
+      val schemaMap = getSchemaProp
+      val schema = getSchema(schemaMap, name)
       //TODO should add more properties in future
       val props = {
         val regions = admin.getRegions(TableName.valueOf(name))
@@ -210,7 +242,7 @@ class HBaseClientImpl(
          */
         val cols = tableDesc.getColumnFamilies
         //{CF1: (Q1, Q2, Q3, ... ,Qn)}; {CF2: (Q1, Q2, Q3, ... ,Qn)}; ... ;{CF3: (Q1, Q2, Q3, ... ,Qn)}
-        val qualifiers = colNames.groupBy(_._1).map(a => s"{${a._1}:(${a._2.flatMap(_._2).mkString(",")})}").mkString(";")
+        val qualifiers = getColumnNames(schemaMap, name)
         //          .map(cf=>s"{${cf._1}:(${cf._2.mkString(",")})}").mkString(";")
         val encoding = cols.map(family => family.getNameAsString -> Bytes.toString(family.getDataBlockEncoding.getNameInBytes)).mkString(";")
         //"K1, K2, K3, ... ,Kn"
@@ -298,7 +330,7 @@ class HBaseClientImpl(
         columnFamily.setDataBlockEncoding(DataBlockEncoding.valueOf(en))
         columnFamily.setCompressionType(Compression.Algorithm.valueOf(compression))
         columnFamily.setBloomFilterType(BloomType.valueOf(bloom))
-        tableDesc.addColumnFamily(columnFamily.build())
+        tableDesc.setColumnFamily(columnFamily.build())
       }
     }
     val split = splitKeys.split(",").filter(_.nonEmpty).map(Bytes.toBytes)
@@ -404,7 +436,7 @@ class HBaseClientImpl(
   }
 
   /** Loads a static partition into an existing table. */
-  override def loadPartition(loadPath: String, dbName: String, tableName: String, partSpec: util.LinkedHashMap[String, String], replace: Boolean, inheritTableSpecs: Boolean, isSrcLocal: Boolean): Unit = {
+  override def loadPartition(loadPath: String, dbName: String, tableName: String, partSpec: ju.LinkedHashMap[String, String], replace: Boolean, inheritTableSpecs: Boolean, isSrcLocal: Boolean): Unit = {
     throw new UnsupportedOperationException("loadPartition")
   }
 
@@ -415,7 +447,7 @@ class HBaseClientImpl(
   }
 
   /** Loads new dynamic partitions into an existing table. */
-  override def loadDynamicPartitions(loadPath: String, dbName: String, tableName: String, partSpec: util.LinkedHashMap[String, String], replace: Boolean, numDP: Int): Unit = {
+  override def loadDynamicPartitions(loadPath: String, dbName: String, tableName: String, partSpec: ju.LinkedHashMap[String, String], replace: Boolean, numDP: Int): Unit = {
     throw new UnsupportedOperationException("loadDynamicPartitions")
   }
 

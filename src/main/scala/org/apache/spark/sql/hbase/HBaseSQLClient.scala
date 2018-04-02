@@ -76,7 +76,7 @@ object HBaseSQLClient {
       process(input.trim())
     } catch {
       case e: Exception =>
-        e.printStackTrace()
+        println(e.getMessage)
     }
   }
 

@@ -1,0 +1,27 @@
+default:test:
+ cf1:
+     q1: string
+     q2: int
+     q3: float
+     q4: boolean
+     q5: double
+ cf2:
+     q1: long
+     q2: short
+     q3: binary
+     q4: byte
+
+hbase:meta:
+  table:
+     state: string
+  info:
+     regioninfo: string
+     seqnumDuringOpen: long
+     server: string
+     serverstartcode: string
+     sn: string
+     state: string
+
+hbase:namespace:
+  info:
+     d: string
