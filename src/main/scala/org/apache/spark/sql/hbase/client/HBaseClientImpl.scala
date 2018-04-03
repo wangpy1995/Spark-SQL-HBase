@@ -1,6 +1,6 @@
 package org.apache.spark.sql.hbase.client
 
-import java.io.{FileInputStream, PrintStream}
+import java.io.{FileInputStream, ObjectInputStream, PrintStream}
 import java.net.URI
 import java.util.Properties
 import java.{util => ju}
@@ -23,7 +23,7 @@ import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.types.{StructField, StructType}
-import org.apache.spark.util.CircularBuffer
+import org.apache.spark.util.{CircularBuffer, SerializableConfiguration}
 import org.yaml.snakeyaml.Yaml
 
 import scala.collection.JavaConverters._
@@ -32,14 +32,14 @@ import scala.collection.JavaConverters._
   * Created by wpy on 2017/5/12.
   */
 class HBaseClientImpl(
-                       override val version: HBaseVersion,
-                       sparkConf: SparkConf,
-                       hadoopConf: Configuration,
+                       @transient override val version: HBaseVersion,
+                       @transient sparkConf: SparkConf,
+                       @transient hadoopConf: Configuration,
                        extraConfig: Map[String, String],
-                       initClassLoader: ClassLoader,
-                       val clientLoader: IsolatedClientLoader)
+                       @transient initClassLoader: ClassLoader,
+                       @transient val clientLoader: IsolatedClientLoader)
   extends HBaseClient
-    with Logging {
+    with Logging{
   def this(sparkConf: SparkConf, hadoopConf: Configuration) {
     this(null, sparkConf, hadoopConf, null, null, null)
   }
@@ -53,45 +53,18 @@ class HBaseClientImpl(
     url
   }
 
-  // Map[ table, Map[ family, Map[qua_name, type ] ]
-  private def getSchemaProp = {
-    val yaml = new Yaml()
-    val inputStream = new FileInputStream(schemaPath)
-    val y = yaml.load[ju.Map[String, ju.Map[String, ju.Map[String, String]]]](inputStream)
-    inputStream.close()
-    y
-  }
-
-  private def getColumnNames(schemaMap: ju.Map[String, ju.Map[String, ju.Map[String, String]]], tableName: String) = {
-    "{+\n" + schemaMap.get(tableName).asScala.map { cf =>
-      cf._1 + "-> (" + cf._2.asScala.keys.mkString(", ") +
-        ")"
-    }.mkString(";\n") + "\n}"
-  }
-
-  private def getSchema(schemaMap: ju.Map[String, ju.Map[String, ju.Map[String, String]]], tableName: String) = StructType {
-    schemaMap.get(tableName).asScala.flatMap { col =>
-      val familyName = col._1
-      col._2.asScala.map { qualifier =>
-        StructField(familyName + "_" + qualifier._1, CatalystSqlParser.parseDataType(qualifier._2))
-      }
-    }.toArray
-  }
-
-
   // Circular buffer to hold what hbase prints to STDOUT and ERR.  Only printed when failures occur.
-  private val outputBuffer = new CircularBuffer()
+  @transient private var outputBuffer = new CircularBuffer()
 
-  private val conf = HBaseConfiguration.create(hadoopConf)
+  private val serializedConf = new SerializableConfiguration(hadoopConf)
 
-  private val userName = User.getCurrent
+  @transient private var conf = HBaseConfiguration.create(serializedConf.value)
 
-  val conn: Connection = ConnectionFactory.createConnection(conf, userName)
+  @transient private var userName = User.getCurrent
+
+  @transient var conn: Connection = ConnectionFactory.createConnection(conf, userName)
 
   lazy val adm: Admin = connection.getAdmin
-
-  /** Returns the configuration for the given key in the current session. */
-  override def getConf(key: String, defaultValue: String): String = conf.get(key, defaultValue)
 
   /*  logInfo(
       s"Root directory location for HBase client " +
@@ -137,6 +110,35 @@ class HBaseClientImpl(
       target = target.getCause
     }
     false
+  }
+
+  /** Returns the configuration for the given key in the current session. */
+  override def getConf(key: String, defaultValue: String): String = conf.get(key, defaultValue)
+
+  // Map[ table, Map[ family, Map[qua_name, type ] ]
+  private def getSchemaProp = {
+    val yaml = new Yaml()
+    val inputStream = new FileInputStream(schemaPath)
+    val y = yaml.load[ju.Map[String, ju.Map[String, ju.Map[String, String]]]](inputStream)
+    inputStream.close()
+    y
+  }
+
+  private def getColumnNames(schemaMap: ju.Map[String, ju.Map[String, ju.Map[String, String]]], tableName: String) = {
+    "{+\n" + schemaMap.get(tableName).asScala.map { cf =>
+      cf._1 + "-> (" + cf._2.asScala.keys.mkString(", ") +
+        ")"
+    }.mkString(";\n") + "\n}"
+  }
+
+  private def getSchema(schemaMap: ju.Map[String, ju.Map[String, ju.Map[String, String]]], tableName: String) = StructType {
+    val rowKeyType = StructField("row_key", CatalystSqlParser.parseDataType(schemaMap.get(tableName).remove("row").get("key")))
+    (Seq(rowKeyType) ++ schemaMap.get(tableName).asScala.flatMap { col =>
+      val familyName = col._1
+      col._2.asScala.map { qualifier =>
+        StructField(familyName + "_" + qualifier._1, CatalystSqlParser.parseDataType(qualifier._2))
+      }
+    }).toArray
   }
 
   def connection: Connection = {
@@ -462,6 +464,13 @@ class HBaseClientImpl(
   /** Used for testing only.  Removes all data from this instance of HBase. */
   override def reset(): Unit = {
     admin.listTableNames().foreach(tableName => admin.truncateTable(tableName, true))
+  }
+
+  def readObject(input: ObjectInputStream) = {
+    outputBuffer = new CircularBuffer()
+    userName = User.getCurrent
+    conf = serializedConf.value
+    conn = ConnectionFactory.createConnection(conf, userName)
   }
 }
 

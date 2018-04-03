@@ -241,7 +241,7 @@ class HBaseSession(@transient val sc: SparkContext, @transient val config: Confi
     new HBaseSession(sc, config)
   }
 
-  override lazy val catalog: Catalog = new HBaseCatalogImpl(self)
+  @transient override lazy val catalog: Catalog = new HBaseCatalogImpl(self)
 
   @transient override lazy val sharedState: SharedState = new HBaseSharedState(sc)
 

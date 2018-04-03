@@ -3,12 +3,10 @@ package org.apache.spark.sql.hbase.execution
 import org.apache.hadoop.hbase.client.{Result, Scan}
 import org.apache.hadoop.hbase.filter._
 import org.apache.hadoop.hbase.util.Bytes
-import org.apache.hadoop.hbase.{Cell, CellUtil, CompareOperator, TableName}
+import org.apache.hadoop.hbase.{CompareOperator, TableName}
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.catalyst.expressions.aggregate.Count
-import org.apache.spark.sql.catalyst.expressions.codegen.{BufferHolder, UnsafeRowWriter}
-import org.apache.spark.sql.catalyst.expressions.{And, Attribute, AttributeMap, AttributeReference, AttributeSet, Cast, Contains, EndsWith, EqualTo, Expression, GenericInternalRow, GreaterThan, GreaterThanOrEqual, InSet, IsNotNull, IsNull, LessThan, LessThanOrEqual, Literal, NamedExpression, Or, StartsWith, UnsafeProjection, UnsafeRow}
-import org.apache.spark.sql.catalyst.{CatalystTypeConverters, InternalRow}
+import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.expressions.{And, Attribute, AttributeMap, AttributeReference, AttributeSet, Cast, Contains, EndsWith, EqualTo, Expression, GenericInternalRow, GreaterThan, GreaterThanOrEqual, InSet, IsNotNull, IsNull, LessThan, LessThanOrEqual, Literal, NamedExpression, Or, StartsWith, UnsafeProjection}
 import org.apache.spark.sql.execution.LeafExecNode
 import org.apache.spark.sql.execution.metric.SQLMetrics
 import org.apache.spark.sql.hbase._
@@ -28,6 +26,9 @@ case class HBaseTableScanExec(
   val meta = relation.tableMeta
   val parameters = meta.properties
   val tableName = meta.identifier.database.get + ":" + meta.identifier.table
+
+  private val HBASE_ROW_BYTES = Bytes.toBytes("row")
+  private val HBASE_KEY_BYTES = Bytes.toBytes("key")
 
   override lazy val metrics = Map(
     "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"))
@@ -74,7 +75,11 @@ case class HBaseTableScanExec(
     var i = 0
     val internalRow = new GenericInternalRow(size)
     cols.foreach { cf =>
-      val v = result.getValue(cf._1, cf._2)
+      val v = if (Bytes.equals(cf._1, HBASE_ROW_BYTES) && Bytes.equals(cf._2, HBASE_KEY_BYTES))
+        result.getRow
+      else
+        result.getValue(cf._1, cf._2)
+
       if (v == null) internalRow.update(i, null)
       else cf._3 match {
         case ByteType =>
@@ -113,7 +118,8 @@ case class HBaseTableScanExec(
   def addColumnFamiliesToScan(scan: Scan, filters: Option[Filter], predicate: Option[Expression], projectionList: Seq[NamedExpression]): Scan = {
     requestedAttributes.foreach { qualifier =>
       val column_qualifier = qualifier.name.split("_", 2)
-      scan.addColumn(column_qualifier.head.getBytes, column_qualifier.last.getBytes)
+      if (qualifier.name != "row_key")
+        scan.addColumn(column_qualifier.head.getBytes, column_qualifier.last.getBytes)
     }
     scan.setCaching(1000)
     scan.readAllVersions()

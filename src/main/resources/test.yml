@@ -1,4 +1,6 @@
 default:test:
+ row:
+     key: string
  cf1:
      q1: string
      q2: int
@@ -12,6 +14,8 @@ default:test:
      q4: byte
 
 hbase:meta:
+  row:
+     key: string
   table:
      state: string
   info:
@@ -23,5 +27,7 @@ hbase:meta:
      state: string
 
 hbase:namespace:
+  row:
+       key: string
   info:
      d: string
