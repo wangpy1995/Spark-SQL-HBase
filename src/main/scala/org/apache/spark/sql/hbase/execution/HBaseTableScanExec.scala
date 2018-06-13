@@ -57,7 +57,7 @@ case class HBaseTableScanExec(
         val proj = UnsafeProjection.create(schema)
         val columnFamily = schema.map { field =>
           val cf_q = field.name.split("_")
-          (Bytes.toBytes(cf_q.head), Bytes.toBytes(cf_q.last), field.dataType)
+          (Bytes.toBytes(cf_q.head), Bytes.toBytes(cf_q.last), genHBaseFieldConverter(field.dataType))
         }
         proj.initialize(index)
         val size = schema.length
@@ -69,46 +69,48 @@ case class HBaseTableScanExec(
       }
   }
 
-  type CF_Q_TYPE = (Array[Byte], Array[Byte], DataType)
+  type CF_QUALIFIER_CONVERTER = (Array[Byte], Array[Byte], (InternalRow, Int, Array[Byte]) => Unit)
 
-  def hbase2SparkRow(result: Result, size: Int, cols: Seq[CF_Q_TYPE]): InternalRow = {
+  def genHBaseFieldConverter(dataType: DataType): (InternalRow, Int, Array[Byte]) => Unit = dataType match {
+    case ByteType =>
+      (internalRow, i, v) => internalRow.update(i, v.head)
+
+    case StringType =>
+      (internalRow, i, v) => internalRow.update(i, UTF8String.fromBytes(v))
+
+    //convert to milli seconds
+    case TimestampType =>
+      (internalRow, i, v) => internalRow.update(i, Bytes.toLong(v) * 1000)
+    case LongType =>
+      (internalRow, i, v) => internalRow.update(i, Bytes.toLong(v))
+    case IntegerType =>
+      (internalRow, i, v) => internalRow.update(i, Bytes.toInt(v))
+    case ShortType =>
+      (internalRow, i, v) => internalRow.update(i, Bytes.toShort(v))
+
+    case BooleanType =>
+      (internalRow, i, v) => internalRow.update(i, Bytes.toBoolean(v))
+
+    case DoubleType =>
+      (internalRow, i, v) => internalRow.update(i, Bytes.toDouble(v))
+    case FloatType =>
+      (internalRow, i, v) => internalRow.update(i, Bytes.toFloat(v))
+
+    case _ =>
+      (internalRow, i, v) => internalRow.update(i, v)
+  }
+
+  def hbase2SparkRow(result: Result, size: Int, cols: Seq[CF_QUALIFIER_CONVERTER]): InternalRow = {
     var i = 0
     val internalRow = new GenericInternalRow(size)
-    cols.foreach { cf =>
-      val v = if (Bytes.equals(cf._1, HBASE_ROW_BYTES) && Bytes.equals(cf._2, HBASE_KEY_BYTES))
+    cols.foreach { case (family, qualifier, convert) =>
+      val v = if (Bytes.equals(family, HBASE_ROW_BYTES) && Bytes.equals(qualifier, HBASE_KEY_BYTES))
         result.getRow
       else
-        result.getValue(cf._1, cf._2)
+        result.getValue(family, qualifier)
 
       if (v == null) internalRow.update(i, null)
-      else cf._3 match {
-        case ByteType =>
-          internalRow.update(i, v.head)
-
-        case StringType =>
-          internalRow.update(i, UTF8String.fromBytes(v))
-
-        //convert to milli seconds
-        case TimestampType =>
-          internalRow.update(i, Bytes.toLong(v) * 1000)
-        case LongType =>
-          internalRow.update(i, Bytes.toLong(v))
-        case IntegerType =>
-          internalRow.update(i, Bytes.toInt(v))
-        case ShortType =>
-          internalRow.update(i, Bytes.toShort(v))
-
-        case BooleanType =>
-          internalRow.update(i, Bytes.toBoolean(v))
-
-        case DoubleType =>
-          internalRow.update(i, Bytes.toDouble(v))
-        case FloatType =>
-          internalRow.update(i, Bytes.toFloat(v))
-
-        case _ =>
-          internalRow.update(i, v)
-      }
+      else convert(internalRow, i, v)
       i += 1
     }
     internalRow
