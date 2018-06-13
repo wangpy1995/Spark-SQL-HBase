@@ -8,7 +8,7 @@ import org.apache.hadoop.hbase.io.ImmutableBytesWritable
 import org.apache.hadoop.hbase.mapreduce.{IdentityTableMapper, TableInputFormat, TableMapReduceUtil}
 import org.apache.hadoop.mapred.JobConf
 import org.apache.hadoop.mapreduce.Job
-import org.apache.hadoop.security.UserGroupInformation
+import org.apache.hadoop.security.{Credentials, UserGroupInformation}
 import org.apache.hadoop.security.UserGroupInformation.AuthenticationMethod
 import org.apache.spark.api.java.JavaSparkContext
 import org.apache.spark.broadcast.Broadcast
@@ -20,23 +20,24 @@ import org.apache.spark.sql.internal.{SessionState, SharedState, StaticSQLConf}
 import org.apache.spark.sql.{SQLContext, SparkSession}
 import org.apache.spark.{SerializableWritable, SparkContext}
 
+import scala.annotation.meta.param
 import scala.reflect.ClassTag
 
 /**
   * Created by wpy on 17-5-16.
   */
-class HBaseSQLContext private[hbase](@transient _hbaseSession: HBaseSession,
+class HBaseSQLContext private[hbase](@(transient@param) _hbaseSession: HBaseSession,
                                      @transient val config: Configuration,
                                      val tmpHdfsConfgFile: String = null)
   extends SQLContext(_hbaseSession) with Logging {
   self =>
-  @transient var tmpHdfsConfiguration: Configuration = config
-  @transient var appliedCredentials = false
-  @transient val job = Job.getInstance(config)
+  @transient private var tmpHdfsConfiguration: Configuration = config
+  @transient private var appliedCredentials = false
+  @transient private val job: Job = Job.getInstance(config)
   TableMapReduceUtil.initCredentials(job)
-  @transient var credentials = job.getCredentials
-  val broadcastedConf = _hbaseSession.sparkContext.broadcast(new SerializableWritable(config))
-  val credentialsConf = _hbaseSession.sparkContext.broadcast(new SerializableWritable(job.getCredentials))
+  @transient private  var credentials = job.getCredentials
+  private val broadcastedConf = _hbaseSession.sparkContext.broadcast(new SerializableWritable(config))
+  private val credentialsConf = _hbaseSession.sparkContext.broadcast(new SerializableWritable(job.getCredentials))
 
 
   if (tmpHdfsConfgFile != null && config != null) {

@@ -26,18 +26,19 @@ import org.apache.spark.sql.types.{StructField, StructType}
 import org.apache.spark.util.{CircularBuffer, SerializableConfiguration}
 import org.yaml.snakeyaml.Yaml
 
+import scala.annotation.meta.param
 import scala.collection.JavaConverters._
 
 /**
   * Created by wpy on 2017/5/12.
   */
 class HBaseClientImpl(
-                       @transient override val version: HBaseVersion,
-                       @transient sparkConf: SparkConf,
-                       @transient hadoopConf: Configuration,
+                       @(transient@param) override val version: HBaseVersion,
+                       @(transient@param) sparkConf: SparkConf,
+                       @(transient@param) hadoopConf: Configuration,
                        extraConfig: Map[String, String],
-                       @transient initClassLoader: ClassLoader,
-                       @transient val clientLoader: IsolatedClientLoader)
+                       @(transient@param) initClassLoader: ClassLoader,
+                       @(transient@param) val clientLoader: IsolatedClientLoader)
   extends HBaseClient
     with Logging{
   def this(sparkConf: SparkConf, hadoopConf: Configuration) {
@@ -321,7 +322,7 @@ class HBaseClientImpl(
     }*/
 
     cols.split(";").foreach {
-      case pattern(cf, _, _*) => {
+      case pattern(cf, _, _*) =>
         val bloom = bloomType(cf)
         val compression = zip(cf)
         val en = encoding(cf)
@@ -331,7 +332,6 @@ class HBaseClientImpl(
         columnFamily.setCompressionType(Compression.Algorithm.valueOf(compression))
         columnFamily.setBloomFilterType(BloomType.valueOf(bloom))
         tableDesc.setColumnFamily(columnFamily.build())
-      }
     }
     val split = splitKeys.split(",").filter(_.nonEmpty).map(Bytes.toBytes)
     //create table
@@ -466,7 +466,7 @@ class HBaseClientImpl(
     admin.listTableNames().foreach(tableName => admin.truncateTable(tableName, true))
   }
 
-  def readObject(input: ObjectInputStream) = {
+  def readObject(input: ObjectInputStream): Unit = {
     outputBuffer = new CircularBuffer()
     userName = User.getCurrent
     conf = serializedConf.value
