@@ -12,7 +12,8 @@ import org.apache.spark.sql.types.StructType
   * Created by wpy on 17-5-16.
   */
 class HBaseExternalCatalog(conf: SparkConf, hadoopConf: Configuration)
-  extends ExternalCatalog with Logging {
+  extends ExternalCatalog
+    with Logging {
 
   import CatalogTypes.TablePartitionSpec
 
@@ -20,15 +21,15 @@ class HBaseExternalCatalog(conf: SparkConf, hadoopConf: Configuration)
   //  val client: HBaseClient = IsolatedClientLoader.forVersion("2.0", "2.7.1", conf, hadoopConf).createClient()
   val client = new HBaseClientImpl(conf, hadoopConf)
 
-  override protected def doCreateDatabase(dbDefinition: CatalogDatabase, ignoreIfExists: Boolean): Unit = {
+  override def createDatabase(dbDefinition: CatalogDatabase, ignoreIfExists: Boolean): Unit = {
     client.createDatabase(dbDefinition, ignoreIfExists)
   }
 
-  override protected def doDropDatabase(db: String, ignoreIfNotExists: Boolean, cascade: Boolean): Unit = {
+  override def dropDatabase(db: String, ignoreIfNotExists: Boolean, cascade: Boolean): Unit = {
     client.dropDatabase(db, ignoreIfNotExists, cascade)
   }
 
-  override def doAlterDatabase(dbDefinition: CatalogDatabase): Unit = {
+  override def alterDatabase(dbDefinition: CatalogDatabase): Unit = {
     client.alterDatabase(dbDefinition)
   }
 
@@ -52,30 +53,30 @@ class HBaseExternalCatalog(conf: SparkConf, hadoopConf: Configuration)
     client.setCurrentDatabase(db)
   }
 
-  override protected def doCreateTable(tableDefinition: CatalogTable, ignoreIfExists: Boolean): Unit = {
+  override def createTable(tableDefinition: CatalogTable, ignoreIfExists: Boolean): Unit = {
     client.createTable(tableDefinition, ignoreIfExists)
   }
 
-  override protected def doDropTable(db: String, table: String, ignoreIfNotExists: Boolean, purge: Boolean): Unit = {
+  override def dropTable(db: String, table: String, ignoreIfNotExists: Boolean, purge: Boolean): Unit = {
     client.dropTable(db, table, ignoreIfNotExists, purge)
   }
 
-  override protected def doRenameTable(db: String, oldName: String, newName: String): Unit = {
+  override def renameTable(db: String, oldName: String, newName: String): Unit = {
   }
 
-  override def doAlterTable(tableDefinition: CatalogTable): Unit = {
+  override def alterTable(tableDefinition: CatalogTable): Unit = {
   }
 
-  override def doAlterTableDataSchema(db: String, table: String, schema: StructType): Unit = {
+  override def alterTableDataSchema(db: String, table: String, schema: StructType): Unit = {
   }
 
   override def getTable(db: String, table: String): CatalogTable = {
     client.getTable(db, table)
   }
 
-  /*override def getTableOption(db: String, table: String): Option[CatalogTable] = {
-    client.getTableOption(db, table)
-  }*/
+  override def getTablesByName(db: String, tables: Seq[String]): Seq[CatalogTable] = {
+    tables.map(getTable(db,_))
+  }
 
   override def tableExists(db: String, table: String): Boolean = {
     client.tableExists(db, table)
@@ -89,6 +90,10 @@ class HBaseExternalCatalog(conf: SparkConf, hadoopConf: Configuration)
     if (pattern == "*")
       listTables(db).filter(_.matches("." + pattern))
     else listTables(db).filter(_.matches(pattern))
+  }
+
+  override def listViews(db: String, pattern: String): Seq[String] = {
+    throw new UnsupportedOperationException("listViews")
   }
 
   override def loadTable(db: String, table: String, loadPath: String, isOverwrite: Boolean, isSrcLocal: Boolean): Unit = {
@@ -141,15 +146,15 @@ class HBaseExternalCatalog(conf: SparkConf, hadoopConf: Configuration)
     throw new UnsupportedOperationException("listPartitionsByFilter")
   }
 
-  override protected def doCreateFunction(db: String, funcDefinition: CatalogFunction): Unit = {
+  override def createFunction(db: String, funcDefinition: CatalogFunction): Unit = {
     throw new UnsupportedOperationException("doCreateFunction")
   }
 
-  override protected def doDropFunction(db: String, funcName: String): Unit = {
+  override def dropFunction(db: String, funcName: String): Unit = {
     throw new UnsupportedOperationException("doDropFunction")
   }
 
-  override protected def doRenameFunction(db: String, oldName: String, newName: String): Unit = {
+  override def renameFunction(db: String, oldName: String, newName: String): Unit = {
     throw new UnsupportedOperationException("doRenameFunction")
   }
 
@@ -165,11 +170,11 @@ class HBaseExternalCatalog(conf: SparkConf, hadoopConf: Configuration)
     throw new UnsupportedOperationException("listFunctions")
   }
 
-  override def doAlterTableStats(db: String, table: String, stats: Option[CatalogStatistics]): Unit = {
+  override def alterTableStats(db: String, table: String, stats: Option[CatalogStatistics]): Unit = {
     throw new UnsupportedOperationException("alterTableStats")
   }
 
-  override protected def doAlterFunction(db: String, funcDefinition: CatalogFunction): Unit = {
+  override def alterFunction(db: String, funcDefinition: CatalogFunction): Unit = {
     throw new UnsupportedOperationException("doAlterFunction")
   }
 }

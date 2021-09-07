@@ -2,19 +2,19 @@ package org.apache.spark.sql.hbase.execution
 
 import org.apache.spark.sql.catalyst.analysis.UnresolvedRelation
 import org.apache.spark.sql.catalyst.catalog.CatalogTable
-import org.apache.spark.sql.catalyst.plans.logical.{InsertIntoTable, LogicalPlan}
+import org.apache.spark.sql.catalyst.plans.logical.{InsertIntoStatement, LogicalPlan}
 import org.apache.spark.sql.execution.command.RunnableCommand
 import org.apache.spark.sql.{AnalysisException, Row, SaveMode, SparkSession}
 
 import scala.util.control.NonFatal
 
 /**
-  * Create table and insert the query result into it.
-  *
-  * @param tableDesc the Table Describe, which may contains serde, storage handler etc.
-  * @param query     the query whose result will be insert into the new relation
-  * @param mode      SaveMode
-  */
+ * Create table and insert the query result into it.
+ *
+ * @param tableDesc the Table Describe, which may contains serde, storage handler etc.
+ * @param query     the query whose result will be insert into the new relation
+ * @param mode      SaveMode
+ */
 case class CreateHBaseTableAsSelectCommand(
                                             tableDesc: CatalogTable,
                                             query: LogicalPlan,
@@ -39,9 +39,10 @@ case class CreateHBaseTableAsSelectCommand(
       }
 
       sparkSession.sessionState.executePlan(
-        InsertIntoTable(
+        InsertIntoStatement(
           UnresolvedRelation(tableIdentifier),
           Map(),
+          Seq.empty,
           query,
           overwrite = false,
           ifPartitionNotExists = false)).toRdd
@@ -55,9 +56,10 @@ case class CreateHBaseTableAsSelectCommand(
 
       try {
         sparkSession.sessionState.executePlan(
-          InsertIntoTable(
+          InsertIntoStatement(
             UnresolvedRelation(tableIdentifier),
             Map(),
+            Seq.empty,
             query,
             overwrite = true,
             ifPartitionNotExists = false)).toRdd
@@ -73,9 +75,14 @@ case class CreateHBaseTableAsSelectCommand(
     Seq.empty[Row]
   }
 
-  override def argString: String = {
+  def argString: String = {
     s"[Database:${tableDesc.database}}, " +
       s"TableName: ${tableDesc.identifier.table}, " +
-      s"InsertIntoHiveTable]"
+      s"InsertIntoHBaseTable]"
+  }
+
+  override protected def withNewChildrenInternal(newChildren: IndexedSeq[LogicalPlan]): LogicalPlan = {
+    assert(newChildren.size == 1, "Incorrect number of children")
+    copy(query=newChildren.head)
   }
 }

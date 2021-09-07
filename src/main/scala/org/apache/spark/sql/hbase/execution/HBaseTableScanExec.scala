@@ -6,7 +6,8 @@ import org.apache.hadoop.hbase.util.Bytes
 import org.apache.hadoop.hbase.{CompareOperator, TableName}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{And, Attribute, AttributeMap, AttributeReference, AttributeSet, Cast, Contains, EndsWith, EqualTo, Expression, GenericInternalRow, GreaterThan, GreaterThanOrEqual, InSet, IsNotNull, IsNull, LessThan, LessThanOrEqual, Literal, NamedExpression, Or, StartsWith, UnsafeProjection}
+import org.apache.spark.sql.catalyst.expressions.{And, Attribute, AttributeMap, AttributeReference, AttributeSeq, AttributeSet, Cast, Contains, EndsWith, EqualTo, Expression, GenericInternalRow, GreaterThan, GreaterThanOrEqual, InSet, IsNotNull, IsNull, LessThan, LessThanOrEqual, Literal, NamedExpression, Or, StartsWith, UnsafeProjection}
+import org.apache.spark.sql.catalyst.plans.QueryPlan
 import org.apache.spark.sql.execution.LeafExecNode
 import org.apache.spark.sql.execution.metric.SQLMetrics
 import org.apache.spark.sql.hbase._
@@ -14,16 +15,16 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
 /**
-  * Created by wpy on 17-5-16.
-  */
+ * Created by wpy on 17-5-16.
+ */
 private[hbase]
 case class HBaseTableScanExec(
                                requestedAttributes: Seq[Attribute],
-                               relation: HBaseRelation,
+                               plan: HBasePlan,
                                filter: Seq[Expression])(
                                @transient private val hbaseSession: HBaseSession)
   extends LeafExecNode {
-  val meta = relation.tableMeta
+  val meta = plan.tableMeta
   val parameters = meta.properties
   val tableName = meta.identifier.database.get + ":" + meta.identifier.table
 
@@ -36,7 +37,7 @@ case class HBaseTableScanExec(
   override def producedAttributes: AttributeSet = outputSet ++
     AttributeSet(filter.flatMap(_.references))
 
-  private val originalAttributes = AttributeMap(relation.output.map(a => a -> a))
+  private val originalAttributes = AttributeMap(plan.output.map(a => a -> a))
 
   override val output: Seq[Attribute] = {
     // Retrieve the original attributes based on expression ID so that capitalization matches.
@@ -68,6 +69,9 @@ case class HBaseTableScanExec(
         }
       }
   }
+
+
+  override def otherCopyArgs: Seq[AnyRef] = Seq(hbaseSession)
 
   type CF_QUALIFIER_CONVERTER = (Array[Byte], Array[Byte], (InternalRow, Int, Array[Byte]) => Unit)
 

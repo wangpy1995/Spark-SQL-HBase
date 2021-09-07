@@ -1,28 +1,27 @@
 package org.apache.spark.sql.hbase
 
 import java.util.Locale
-
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.catalog.CatalogTable
-import org.apache.spark.sql.catalyst.expressions.{And, Attribute, AttributeMap, AttributeReference, AttributeSet, Expression, NamedExpression}
+import org.apache.spark.sql.catalyst.expressions.{And, Attribute, AttributeMap, AttributeReference, AttributeSet, Expression, GenericInternalRow, NamedExpression}
 import org.apache.spark.sql.catalyst.planning.PhysicalOperation
-import org.apache.spark.sql.catalyst.plans.logical.{InsertIntoTable, LogicalPlan}
+import org.apache.spark.sql.catalyst.plans.logical.{InsertIntoStatement, LogicalPlan}
 import org.apache.spark.sql.catalyst.rules.Rule
-import org.apache.spark.sql.catalyst.{InternalRow, expressions}
+import org.apache.spark.sql.catalyst.{CatalystTypeConverters, InternalRow, expressions}
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.command.{CreateTableCommand, ExecutedCommandExec}
 import org.apache.spark.sql.execution.datasources.DataSourceStrategy.selectFilters
-import org.apache.spark.sql.execution.datasources.{CreateTable, LogicalRelation}
+import org.apache.spark.sql.execution.datasources.{CreateTable, InsertIntoDataSourceCommand, InsertIntoHadoopFsRelationCommand, LogicalRelation}
 import org.apache.spark.sql.hbase.execution.{CreateHBaseTableAsSelectCommand, HBaseTableScanExec, InsertIntoHBaseTable}
 import org.apache.spark.sql.sources.{Filter, PrunedFilteredScan}
-import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.types.{DataType, StructType}
 
 import scala.collection.mutable.ArrayBuffer
 
 /**
-  * Created by wpy on 17-5-17.
-  */
+ * Created by wpy on 17-5-17.
+ */
 private[hbase] trait HBaseStrategies {
   self: SparkPlanner =>
 
@@ -46,16 +45,36 @@ private[hbase] trait HBaseStrategies {
     }
 
     /**
-      * Convert RDD of Row into RDD of InternalRow with objects in catalyst types
-      */
+     * Convert RDD of Row into RDD of InternalRow with objects in catalyst types
+     */
     private[this] def toCatalystRDD(
                                      relation: LogicalRelation,
                                      output: Seq[Attribute],
                                      rdd: RDD[Row]): RDD[InternalRow] = {
       if (relation.relation.needConversion) {
-        RDDConversions.rowToRowRdd(rdd, output.map(_.dataType))
+        rowToRowRdd(rdd, output.map(_.dataType))
       } else {
         rdd.asInstanceOf[RDD[InternalRow]]
+      }
+    }
+
+    /**
+     * Convert the objects inside Row into the types Catalyst expected.
+     */
+    private def rowToRowRdd(data: RDD[Row], outputTypes: Seq[DataType]): RDD[InternalRow] = {
+      data.mapPartitions { iterator =>
+        val numColumns = outputTypes.length
+        val mutableRow = new GenericInternalRow(numColumns)
+        val converters = outputTypes.map(CatalystTypeConverters.createToCatalystConverter)
+        iterator.map { r =>
+          var i = 0
+          while (i < numColumns) {
+            mutableRow(i) = converters(i)(r(i))
+            i += 1
+          }
+
+          mutableRow
+        }
       }
     }
 
@@ -138,9 +157,10 @@ private[hbase] trait HBaseStrategies {
 
         val scan = RowDataSourceScanExec(
           projects.map(_.toAttribute),
-          projects.map(_.toAttribute).indices,
+          StructType.fromAttributes(projects.map(_.toAttribute)),
           pushedFilters.toSet,
           pushedFilters.toSet,
+          None,
           scanBuilder(requestedColumns, candidatePredicates, pushedFilters),
           relation.relation,
           relation.catalogTable.map(_.identifier))
@@ -152,9 +172,10 @@ private[hbase] trait HBaseStrategies {
 
         val scan = RowDataSourceScanExec(
           requestedColumns,
-          requestedColumns.indices,
+          StructType.fromAttributes(requestedColumns),
           pushedFilters.toSet,
           pushedFilters.toSet,
+          None,
           scanBuilder(requestedColumns, candidatePredicates, pushedFilters),
           relation.relation,
           relation.catalogTable.map(_.identifier))
@@ -166,20 +187,20 @@ private[hbase] trait HBaseStrategies {
 
   object HBaseTableScans extends Strategy {
     override def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
-      case PhysicalOperation(projectList, filter, relation: HBaseRelation) =>
+      case PhysicalOperation(projectList, filter, plan: HBasePlan) =>
         /*  pruneFilterProject(
             projectList,
             filter,
             identity[Seq[Expression]],
             HBaseTableScanExec(_, relation, filter)(sparkSession.asInstanceOf[HBaseSession])) :: Nil*/
-        filterProject4HBase(relation, projectList, filter) :: Nil
+        filterProject4HBase(plan, projectList, filter) :: Nil
       case _ =>
         Nil
     }
   }
 
-  protected def filterProject4HBase(relation: HBaseRelation, projectList: Seq[NamedExpression], filterPredicates: Seq[Expression]): SparkPlan = {
-    val attributeMap: AttributeMap[AttributeReference] = AttributeMap(relation.output.map(o => (o, o)))
+  protected def filterProject4HBase(plan: HBasePlan, projectList: Seq[NamedExpression], filterPredicates: Seq[Expression]): SparkPlan = {
+    val attributeMap: AttributeMap[AttributeReference] = AttributeMap(plan.output.map(o => (o, o)))
     val projectSet = AttributeSet(projectList.flatMap(_.references))
 
     val filterSet = AttributeSet(filterPredicates.flatMap(_.references))
@@ -189,32 +210,32 @@ private[hbase] trait HBaseStrategies {
           _ transform { case a: AttributeReference => attributeMap(a) }
         }.reduceLeft(And)
       )
+    } else {
+      filterPredicates
     }
-    else filterPredicates
     if (projectList.map(_.toAttribute) == projectList && projectSet.size == projectList.size && filterSet.subsetOf(projectSet)) {
       val requestedColumns = projectList.asInstanceOf[Seq[Attribute]].map(attributeMap)
-      HBaseTableScanExec(requestedColumns, relation, filters)(sparkSession.asInstanceOf[HBaseSession])
-    }
-    else {
+      HBaseTableScanExec(requestedColumns, plan, filters)(sparkSession.asInstanceOf[HBaseSession])
+    } else {
       //val requestedColumns = projectSet.map(relation.attributeMap ).toSeq
       val requestedColumns = attributeMap.keySet.toSeq
-      val scan = HBaseTableScanExec(requestedColumns, relation, filters)(sparkSession.asInstanceOf[HBaseSession])
+      val scan = HBaseTableScanExec(requestedColumns, plan, filters)(sparkSession.asInstanceOf[HBaseSession])
       ProjectExec(projectList, scan)
     }
   }
 }
 
 /**
-  * Replaces generic operations with specific variants that are designed to work with Hive.
-  *
-  * Note that, this rule must be run after `PreprocessTableCreation` and
-  * `PreprocessTableInsertion`.
-  */
+ * Replaces generic operations with specific variants that are designed to work with Hive.
+ *
+ * Note that, this rule must be run after `PreprocessTableCreation` and
+ * `PreprocessTableInsertion`.
+ */
 object HBaseAnalysis extends Rule[LogicalPlan] {
-  override def apply(plan: LogicalPlan): LogicalPlan = plan transformUp  {
-    case InsertIntoTable(relation: HBaseRelation, _, query, overwrite, ifNotExists)
-      if isHBaseTable(relation.tableMeta) =>
-      InsertIntoHBaseTable(relation.tableMeta, query, overwrite, ifNotExists)
+  override def apply(plan: LogicalPlan): LogicalPlan = plan transformUp {
+    case InsertIntoStatement(plan: HBasePlan, _, _, query, overwrite, ifNotExists)
+      if isHBaseTable(plan.tableMeta) =>
+      InsertIntoHBaseTable(plan.tableMeta, query, overwrite, ifNotExists)
 
     case CreateTable(tableDesc, mode, None) if isHBaseTable(tableDesc) =>
       CreateTableCommand(tableDesc, ignoreIfExists = mode == SaveMode.Ignore)

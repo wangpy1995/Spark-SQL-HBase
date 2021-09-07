@@ -16,6 +16,7 @@ import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalog.Catalog
+import org.apache.spark.sql.catalyst.catalog.{ExternalCatalogEvent, ExternalCatalogWithListener}
 import org.apache.spark.sql.internal.{SessionState, SharedState, StaticSQLConf}
 import org.apache.spark.sql.{SQLContext, SparkSession}
 import org.apache.spark.{SerializableWritable, SparkContext}
@@ -24,8 +25,8 @@ import scala.annotation.meta.param
 import scala.reflect.ClassTag
 
 /**
-  * Created by wpy on 17-5-16.
-  */
+ * Created by wpy on 17-5-16.
+ */
 class HBaseSQLContext private[hbase](@(transient@param) _hbaseSession: HBaseSession,
                                      @transient val config: Configuration,
                                      val tmpHdfsConfgFile: String = null)
@@ -35,7 +36,7 @@ class HBaseSQLContext private[hbase](@(transient@param) _hbaseSession: HBaseSess
   @transient private var appliedCredentials = false
   @transient private val job: Job = Job.getInstance(config)
   TableMapReduceUtil.initCredentials(job)
-  @transient private  var credentials = job.getCredentials
+  @transient private var credentials = job.getCredentials
   private val broadcastedConf = _hbaseSession.sparkContext.broadcast(new SerializableWritable(config))
   private val credentialsConf = _hbaseSession.sparkContext.broadcast(new SerializableWritable(job.getCredentials))
 
@@ -60,22 +61,22 @@ class HBaseSQLContext private[hbase](@(transient@param) _hbaseSession: HBaseSess
   def this(sc: JavaSparkContext) = this(sc.sc)
 
   /**
-    * Returns a new HBaseContext as new session, which will have separated SQLConf, UDF/UDAF,
-    * temporary tables and SessionState, but sharing the same CacheManager, IsolatedClientLoader
-    * and HBase client (both of execution and metadata) with existing HBaseContext.
-    */
+   * Returns a new HBaseContext as new session, which will have separated SQLConf, UDF/UDAF,
+   * temporary tables and SessionState, but sharing the same CacheManager, IsolatedClientLoader
+   * and HBase client (both of execution and metadata) with existing HBaseContext.
+   */
   override def newSession(): HBaseSQLContext = {
     new HBaseSQLContext(_hbaseSession.newSession(), self.config)
   }
 
   /**
-    * Invalidate and refresh all the cached the metadata of the given table. For performance reasons,
-    * Spark SQL or the external data source library it uses might cache certain metadata about a
-    * table, such as the location of blocks. When those change outside of Spark SQL, users should
-    * call this function to invalidate the cache.
-    *
-    * @since 1.3.0
-    */
+   * Invalidate and refresh all the cached the metadata of the given table. For performance reasons,
+   * Spark SQL or the external data source library it uses might cache certain metadata about a
+   * table, such as the location of blocks. When those change outside of Spark SQL, users should
+   * call this function to invalidate the cache.
+   *
+   * @since 1.3.0
+   */
   def refreshTable(tableName: String): Unit = {
     sparkSession.catalog.refreshTable(tableName)
   }
@@ -100,15 +101,15 @@ class HBaseSQLContext private[hbase](@(transient@param) _hbaseSession: HBaseSess
   }
 
   /**
-    * This function will use the native HBase TableInputFormat with the
-    * given scan object to generate a new RDD
-    *
-    * @param tableName the name of the table to scan
-    * @param scan      the HBase scan object to use to read data from HBase
-    * @param f         function to convert a Result object from HBase into
-    *                  what the user wants in the final generated RDD
-    * @return new RDD with results from scan
-    */
+   * This function will use the native HBase TableInputFormat with the
+   * given scan object to generate a new RDD
+   *
+   * @param tableName the name of the table to scan
+   * @param scan      the HBase scan object to use to read data from HBase
+   * @param f         function to convert a Result object from HBase into
+   *                  what the user wants in the final generated RDD
+   * @return new RDD with results from scan
+   */
   def hbaseRDD[U: ClassTag](tableName: TableName, scan: Scan,
                             f: ((ImmutableBytesWritable, Result)) => U): RDD[U] = {
 
@@ -120,26 +121,25 @@ class HBaseSQLContext private[hbase](@(transient@param) _hbaseSession: HBaseSess
 
     val jconf = new JobConf(job.getConfiguration)
     SparkHadoopUtil.get.addCredentials(jconf)
-    new NewHBaseRDD(_hbaseSession.sparkContext,
+    val rdd = new NewHBaseRDD(_hbaseSession.sparkContext,
       classOf[TableInputFormat],
       classOf[ImmutableBytesWritable],
       classOf[Result],
       job.getConfiguration,
-      this).map(f)
+      this)
+    rdd.map(f)
   }
 
   /**
-    * A overloaded version of HBaseContext hbaseRDD that defines the
-    * type of the resulting RDD
-    *
-    * @param tableName the name of the table to scan
-    * @param scans     the HBase scan object to use to read data from HBase
-    * @return New RDD with results from scan
-    *
-    */
-  def hbaseRDD(tableName: TableName, scans: Scan):
-  RDD[(ImmutableBytesWritable, Result)] = {
-
+   * A overloaded version of HBaseContext hbaseRDD that defines the
+   * type of the resulting RDD
+   *
+   * @param tableName the name of the table to scan
+   * @param scans     the HBase scan object to use to read data from HBase
+   * @return New RDD with results from scan
+   *
+   */
+  def hbaseRDD(tableName: TableName, scans: Scan): RDD[(ImmutableBytesWritable, Result)] = {
     hbaseRDD[(ImmutableBytesWritable, Result)](
       tableName,
       scans,
@@ -147,8 +147,7 @@ class HBaseSQLContext private[hbase](@(transient@param) _hbaseSession: HBaseSess
   }
 
 
-  private def getConf(configBroadcast: Broadcast[SerializableWritable[Configuration]]):
-  Configuration = {
+  private def getConf(configBroadcast: Broadcast[SerializableWritable[Configuration]]): Configuration = {
 
     if (tmpHdfsConfiguration == null && tmpHdfsConfgFile != null) {
       val fs = FileSystem.newInstance(SparkHadoopUtil.get.conf)
@@ -169,8 +168,8 @@ class HBaseSQLContext private[hbase](@(transient@param) _hbaseSession: HBaseSess
   }
 
   /**
-    * underlining wrapper all get mapPartition functions in HBaseContext
-    */
+   * underlining wrapper all get mapPartition functions in HBaseContext
+   */
   private class GetMapPartition[T, U](tableName: TableName,
                                       batchSize: Integer,
                                       makeGet: (T) => Get,
@@ -205,18 +204,18 @@ class HBaseSQLContext private[hbase](@(transient@param) _hbaseSession: HBaseSess
   }
 
   /**
-    * Produces a ClassTag[T], which is actually just a casted ClassTag[AnyRef].
-    *
-    * This method is used to keep ClassTags out of the external Java API, as
-    * the Java compiler cannot produce them automatically. While this
-    * ClassTag-faking does please the compiler, it can cause problems at runtime
-    * if the Scala API relies on ClassTags for correctness.
-    *
-    * Often, though, a ClassTag[AnyRef] will not lead to incorrect behavior,
-    * just worse performance or security issues.
-    * For instance, an Array of AnyRef can hold any type T, but may lose primitive
-    * specialization.
-    */
+   * Produces a ClassTag[T], which is actually just a casted ClassTag[AnyRef].
+   *
+   * This method is used to keep ClassTags out of the external Java API, as
+   * the Java compiler cannot produce them automatically. While this
+   * ClassTag-faking does please the compiler, it can cause problems at runtime
+   * if the Scala API relies on ClassTags for correctness.
+   *
+   * Often, though, a ClassTag[AnyRef] will not lead to incorrect behavior,
+   * just worse performance or security issues.
+   * For instance, an Array of AnyRef can hold any type T, but may lose primitive
+   * specialization.
+   */
   private[spark]
   def fakeClassTag[T]: ClassTag[T] = ClassTag.AnyRef.asInstanceOf[ClassTag[T]]
 
@@ -244,20 +243,24 @@ class HBaseSession(@transient val sc: SparkContext, @transient val config: Confi
 
   @transient override lazy val catalog: Catalog = new HBaseCatalogImpl(self)
 
-  @transient override lazy val sharedState: SharedState = new HBaseSharedState(sc)
+  @transient override lazy val sharedState: SharedState = new HBaseSharedState(sc, initialSessionOptions)
 
   override val sqlContext: HBaseSQLContext = new HBaseSQLContext(this, config)
 
 }
 
 private[hbase] class HBaseSharedState(
-                                       sc: SparkContext)
-  extends SharedState(sc) {
+                                       val sc: SparkContext,
+                                       initialConfigs: scala.collection.Map[String, String])
+  extends SharedState(sc, initialConfigs) {
 
-  override lazy val externalCatalog: HBaseExternalCatalog = {
-    new HBaseExternalCatalog(
+  override lazy val externalCatalog: ExternalCatalogWithListener = {
+    val externalCatalog = new HBaseExternalCatalog(
       sc.conf,
       sc.hadoopConfiguration)
+    val wrapped = new ExternalCatalogWithListener(externalCatalog)
+    wrapped.addListener((event: ExternalCatalogEvent) => sparkContext.listenerBus.post(event))
+    wrapped
   }
 
 }

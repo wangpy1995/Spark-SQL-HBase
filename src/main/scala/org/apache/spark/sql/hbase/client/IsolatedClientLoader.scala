@@ -15,12 +15,12 @@ import org.apache.spark.sql.internal.NonClosableMutableURLClassLoader
 import org.apache.spark.util.{MutableURLClassLoader, Utils}
 
 /**
-  * Created by wpy on 2017/5/12.
-  */
+ * Created by wpy on 2017/5/12.
+ */
 private[hbase] object IsolatedClientLoader extends Logging {
   /**
-    * Creates isolated Hive client loaders by downloading the requested version from maven.
-    */
+   * Creates isolated Hive client loaders by downloading the requested version from maven.
+   */
   def forVersion(
                   version: String,
                   hadoopVersion: String,
@@ -73,6 +73,7 @@ private[hbase] object IsolatedClientLoader extends Logging {
     case "1.1" | "1.1.0" => hbase.v1_1
     case "1.2" | "1.2.0" | "1.2.1" => hbase.v1_2
     case "2.0.0-SNAPSHOT" | "2.0" | "2.0.0" | "2.0.1" => hbase.v2_0
+    case "3.0.0-SNAPSHOT" | "3.0.0-alpha-1-SNAPSHOT" | "3.0.0-alpha-2-SNAPSHOT" | "3.0" | "3.0.0" => hbase.v3_0
   }
 
   private def downloadVersion(
@@ -93,9 +94,10 @@ private[hbase] object IsolatedClientLoader extends Logging {
         SparkSubmitUtils.buildIvySettings(
           Some("http://www.datanucleus.org/downloads/maven2"),
           ivyPath),
-        exclusions = version.exclusions)
+        exclusions = version.exclusions,
+        transitive = true)
     }
-    val allFiles = classpath.split(",").map(new File(_)).toSet
+    val allFiles = classpath.map(new File(_)).toSet
 
     // TODO: Remove copy logic.
     val tempDir = Utils.createTempDir(namePrefix = s"hbase-$version")
@@ -154,11 +156,11 @@ private[hbase] class IsolatedClientLoader(
     name.replaceAll("\\.", "/") + ".class"
 
   /**
-    * The classloader that is used to load an isolated version of Hive.
-    * This classloader is a special URLClassLoader that exposes the addURL method.
-    * So, when we add jar, we can add this new jar directly through the addURL method
-    * instead of stacking a new URLClassLoader on top of it.
-    */
+   * The classloader that is used to load an isolated version of Hive.
+   * This classloader is a special URLClassLoader that exposes the addURL method.
+   * So, when we add jar, we can add this new jar directly through the addURL method
+   * instead of stacking a new URLClassLoader on top of it.
+   */
   private[hbase] val classLoader: MutableURLClassLoader = {
     val isolatedClassLoader =
       if (isolationOn) {
@@ -239,9 +241,9 @@ private[hbase] class IsolatedClientLoader(
   }
 
   /**
-    * The place holder for shared Hive client for all the HiveContext sessions (they share an
-    * IsolatedClientLoader).
-    */
+   * The place holder for shared Hive client for all the HiveContext sessions (they share an
+   * IsolatedClientLoader).
+   */
   private[hbase] var cachedConnection: Any = _
 
   private[hbase] var cachedAdmin: Any = _

@@ -3,24 +3,31 @@ package org.apache.spark.sql.hbase
 import org.apache.spark.annotation.Experimental
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalog.{Catalog, Column, Database, Function, Table}
+import org.apache.spark.sql.catalyst.analysis.UnresolvedTable
 import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
-import org.apache.spark.sql.catalyst.plans.logical.LocalRelation
+import org.apache.spark.sql.catalyst.plans.logical.{LocalRelation, RecoverPartitions}
 import org.apache.spark.sql.catalyst.{DefinedByConstructorParams, FunctionIdentifier, TableIdentifier}
-import org.apache.spark.sql.execution.command.AlterTableRecoverPartitionsCommand
+import org.apache.spark.sql.connector.catalog.{NamespaceChange, SupportsNamespaces}
+import org.apache.spark.sql.errors.{QueryCompilationErrors, QueryExecutionErrors}
 import org.apache.spark.sql.execution.datasources.{CreateTable, DataSource}
 import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import org.apache.spark.storage.StorageLevel
 
+import java.net.URI
+import java.util
 import scala.reflect.runtime.universe.TypeTag
 import scala.util.control.NonFatal
 
 /**
-  * Created by wpy on 17-5-18.
-  */
-class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog {
+ * Created by wpy on 17-5-18.
+ */
+class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog with SupportsNamespaces {
 
   import org.apache.spark.sql.Dataset
+
+  import scala.collection.JavaConverters._
 
   private def sessionCatalog: SessionCatalog = hbaseSession.sessionState.catalog
 
@@ -37,13 +44,13 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog {
   }
 
   /**
-    * Returns the current default database in this session.
-    */
+   * Returns the current default database in this session.
+   */
   override def currentDatabase: String = sessionCatalog.getCurrentDatabase
 
   /**
-    * Sets the current default database in this session.
-    */
+   * Sets the current default database in this session.
+   */
   @throws[AnalysisException]("database does not exist")
   override def setCurrentDatabase(dbName: String): Unit = {
     requireDatabaseExists(dbName)
@@ -51,8 +58,8 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog {
   }
 
   /**
-    * Returns a list of databases available across all sessions.
-    */
+   * Returns a list of databases available across all sessions.
+   */
   override def listDatabases(): Dataset[Database] = {
     val databases = sessionCatalog.listDatabases().map(makeDatabase)
     CatalogImpl.makeDataset(databases, hbaseSession)
@@ -67,17 +74,17 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog {
   }
 
   /**
-    * Returns a list of tables in the current database.
-    * This includes all temporary tables.
-    */
+   * Returns a list of tables in the current database.
+   * This includes all temporary tables.
+   */
   override def listTables(): Dataset[Table] = {
     listTables(currentDatabase)
   }
 
   /**
-    * Returns a list of tables in the specified database.
-    * This includes all temporary tables.
-    */
+   * Returns a list of tables in the specified database.
+   * This includes all temporary tables.
+   */
   @throws[AnalysisException]("database does not exist")
   override def listTables(dbName: String): Dataset[Table] = {
     val tables = sessionCatalog.listTables(dbName).map(makeTable)
@@ -85,21 +92,21 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog {
   }
 
   /**
-    * Returns a Table for the given table/view or temporary view.
-    *
-    * Note that this function requires the table already exists in the Catalog.
-    *
-    * If the table metadata retrieval failed due to any reason (e.g., table serde class
-    * is not accessible or the table type is not accepted by Spark SQL), this function
-    * still returns the corresponding Table without the description and tableType)
-    */
+   * Returns a Table for the given table/view or temporary view.
+   *
+   * Note that this function requires the table already exists in the Catalog.
+   *
+   * If the table metadata retrieval failed due to any reason (e.g., table serde class
+   * is not accessible or the table type is not accepted by Spark SQL), this function
+   * still returns the corresponding Table without the description and tableType)
+   */
   private def makeTable(tableIdent: TableIdentifier): Table = {
     val metadata = try {
       Some(sessionCatalog.getTempViewOrPermanentTableMetadata(tableIdent))
     } catch {
       case NonFatal(_) => None
     }
-    val isTemp = sessionCatalog.isTemporaryTable(tableIdent)
+    val isTemp = sessionCatalog.isTempView(tableIdent)
     new Table(
       name = tableIdent.table,
       database = metadata.map(_.identifier.database).getOrElse(tableIdent.database).orNull,
@@ -109,17 +116,17 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog {
   }
 
   /**
-    * Returns a list of functions registered in the current database.
-    * This includes all temporary functions
-    */
+   * Returns a list of functions registered in the current database.
+   * This includes all temporary functions
+   */
   override def listFunctions(): Dataset[Function] = {
     listFunctions(currentDatabase)
   }
 
   /**
-    * Returns a list of functions registered in the specified database.
-    * This includes all temporary functions
-    */
+   * Returns a list of functions registered in the specified database.
+   * This includes all temporary functions
+   */
   @throws[AnalysisException]("database does not exist")
   override def listFunctions(dbName: String): Dataset[Function] = {
     requireDatabaseExists(dbName)
@@ -140,8 +147,8 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog {
   }
 
   /**
-    * Returns a list of columns for the given table/view or temporary view.
-    */
+   * Returns a list of columns for the given table/view or temporary view.
+   */
   @throws[AnalysisException]("table does not exist")
   override def listColumns(tableName: String): Dataset[Column] = {
     val tableIdent = hbaseSession.sessionState.sqlParser.parseTableIdentifier(tableName)
@@ -149,8 +156,8 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog {
   }
 
   /**
-    * Returns a list of columns for the given table/view or temporary view in the specified database.
-    */
+   * Returns a list of columns for the given table/view or temporary view in the specified database.
+   */
   @throws[AnalysisException]("database or table does not exist")
   override def listColumns(dbName: String, tableName: String): Dataset[Column] = {
     requireTableExists(dbName, tableName)
@@ -175,26 +182,26 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog {
   }
 
   /**
-    * Gets the database with the specified name. This throws an `AnalysisException` when no
-    * `Database` can be found.
-    */
+   * Gets the database with the specified name. This throws an `AnalysisException` when no
+   * `Database` can be found.
+   */
   override def getDatabase(dbName: String): Database = {
     makeDatabase(dbName)
   }
 
   /**
-    * Gets the table or view with the specified name. This table can be a temporary view or a
-    * table/view. This throws an `AnalysisException` when no `Table` can be found.
-    */
+   * Gets the table or view with the specified name. This table can be a temporary view or a
+   * table/view. This throws an `AnalysisException` when no `Table` can be found.
+   */
   override def getTable(tableName: String): Table = {
     val tableIdent = hbaseSession.sessionState.sqlParser.parseTableIdentifier(tableName)
     getTable(tableIdent.database.orNull, tableIdent.table)
   }
 
   /**
-    * Gets the table or view with the specified name in the specified database. This throws an
-    * `AnalysisException` when no `Table` can be found.
-    */
+   * Gets the table or view with the specified name in the specified database. This throws an
+   * `AnalysisException` when no `Table` can be found.
+   */
   override def getTable(dbName: String, tableName: String): Table = {
     if (tableExists(dbName, tableName)) {
       makeTable(TableIdentifier(tableName, Option(dbName)))
@@ -204,70 +211,70 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog {
   }
 
   /**
-    * Gets the function with the specified name. This function can be a temporary function or a
-    * function. This throws an `AnalysisException` when no `Function` can be found.
-    */
+   * Gets the function with the specified name. This function can be a temporary function or a
+   * function. This throws an `AnalysisException` when no `Function` can be found.
+   */
   override def getFunction(functionName: String): Function = {
     val functionIdent = hbaseSession.sessionState.sqlParser.parseFunctionIdentifier(functionName)
     getFunction(functionIdent.database.orNull, functionIdent.funcName)
   }
 
   /**
-    * Gets the function with the specified name. This returns `None` when no `Function` can be
-    * found.
-    */
+   * Gets the function with the specified name. This returns `None` when no `Function` can be
+   * found.
+   */
   override def getFunction(dbName: String, functionName: String): Function = {
     makeFunction(FunctionIdentifier(functionName, Option(dbName)))
   }
 
   /**
-    * Checks if the database with the specified name exists.
-    */
+   * Checks if the database with the specified name exists.
+   */
   override def databaseExists(dbName: String): Boolean = {
     sessionCatalog.databaseExists(dbName)
   }
 
   /**
-    * Checks if the table or view with the specified name exists. This can either be a temporary
-    * view or a table/view.
-    */
+   * Checks if the table or view with the specified name exists. This can either be a temporary
+   * view or a table/view.
+   */
   override def tableExists(tableName: String): Boolean = {
     val tableIdent = hbaseSession.sessionState.sqlParser.parseTableIdentifier(tableName)
     tableExists(tableIdent.database.orNull, tableIdent.table)
   }
 
   /**
-    * Checks if the table or view with the specified name exists in the specified database.
-    */
+   * Checks if the table or view with the specified name exists in the specified database.
+   */
   override def tableExists(dbName: String, tableName: String): Boolean = {
     val tableIdent = TableIdentifier(tableName, Option(dbName))
-    sessionCatalog.isTemporaryTable(tableIdent) || sessionCatalog.tableExists(tableIdent)
+    sessionCatalog.isTempView(tableIdent) || sessionCatalog.tableExists(tableIdent)
   }
 
   /**
-    * Checks if the function with the specified name exists. This can either be a temporary function
-    * or a function.
-    */
+   * Checks if the function with the specified name exists. This can either be a temporary function
+   * or a function.
+   */
   override def functionExists(functionName: String): Boolean = {
     val functionIdent = hbaseSession.sessionState.sqlParser.parseFunctionIdentifier(functionName)
     functionExists(functionIdent.database.orNull, functionIdent.funcName)
   }
 
   /**
-    * Checks if the function with the specified name exists in the specified database.
-    */
+   * Checks if the function with the specified name exists in the specified database.
+   */
   override def functionExists(dbName: String, functionName: String): Boolean = {
     sessionCatalog.functionExists(FunctionIdentifier(functionName, Option(dbName)))
   }
 
   /**
-    * :: Experimental ::
-    * Creates a table from the given path and returns the corresponding DataFrame.
-    * It will use the default data source configured by spark.sql.sources.default.
-    *
-    * @group ddl_ops
-    * @since 2.2.0
-    */
+   * :: Experimental ::
+   * Creates a table from the given path and returns the corresponding DataFrame.
+   * It will use the default data source configured by spark.sql.sources.default.
+   *
+   * @group ddl_ops
+   * @since 2.2.0
+   */
   @Experimental
   override def createTable(tableName: String, path: String): DataFrame = {
     val dataSourceName = hbaseSession.sessionState.conf.defaultDataSourceName
@@ -275,27 +282,27 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog {
   }
 
   /**
-    * :: Experimental ::
-    * Creates a table from the given path and returns the corresponding
-    * DataFrame.
-    *
-    * @group ddl_ops
-    * @since 2.2.0
-    */
+   * :: Experimental ::
+   * Creates a table from the given path and returns the corresponding
+   * DataFrame.
+   *
+   * @group ddl_ops
+   * @since 2.2.0
+   */
   @Experimental
   override def createTable(tableName: String, path: String, source: String): DataFrame = {
     createTable(tableName, source, Map("path" -> path))
   }
 
   /**
-    * :: Experimental ::
-    * (Scala-specific)
-    * Creates a table based on the dataset in a data source and a set of options.
-    * Then, returns the corresponding DataFrame.
-    *
-    * @group ddl_ops
-    * @since 2.2.0
-    */
+   * :: Experimental ::
+   * (Scala-specific)
+   * Creates a table based on the dataset in a data source and a set of options.
+   * Then, returns the corresponding DataFrame.
+   *
+   * @group ddl_ops
+   * @since 2.2.0
+   */
   @Experimental
   override def createTable(
                             tableName: String,
@@ -305,14 +312,14 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog {
   }
 
   /**
-    * :: Experimental ::
-    * (Scala-specific)
-    * Creates a table based on the dataset in a data source, a schema and a set of options.
-    * Then, returns the corresponding DataFrame.
-    *
-    * @group ddl_ops
-    * @since 2.2.0
-    */
+   * :: Experimental ::
+   * (Scala-specific)
+   * Creates a table based on the dataset in a data source, a schema and a set of options.
+   * Then, returns the corresponding DataFrame.
+   *
+   * @group ddl_ops
+   * @since 2.2.0
+   */
   @Experimental
   override def createTable(
                             tableName: String,
@@ -338,124 +345,164 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog {
     hbaseSession.table(tableIdent)
   }
 
-  /**
-    * Drops the local temporary view with the given view name in the catalog.
-    * If the view has been cached/persisted before, it's also unpersisted.
-    *
-    * @param viewName the identifier of the temporary view to be dropped.
-    * @group ddl_ops
-    * @since 2.0.0
-    */
-  override def dropTempView(viewName: String): Boolean = {
-    hbaseSession.sessionState.catalog.getTempView(viewName).exists { viewDef =>
-      hbaseSession.sharedState.cacheManager.uncacheQuery(hbaseSession, viewDef, blocking = true)
-      sessionCatalog.dropTempView(viewName)
-    }
+  override def createTable(
+                            tableName: String,
+                            source: String,
+                            description: String,
+                            options: Map[String, String]): DataFrame = {
+    createTable(tableName, source, new StructType, description, options)
   }
 
   /**
-    * Drops the global temporary view with the given view name in the catalog.
-    * If the view has been cached/persisted before, it's also unpersisted.
-    *
-    * @param viewName the identifier of the global temporary view to be dropped.
-    * @group ddl_ops
-    * @since 2.1.0
-    */
-  override def dropGlobalTempView(viewName: String): Boolean = {
-    hbaseSession.sessionState.catalog.getGlobalTempView(viewName).exists { viewDef =>
-      hbaseSession.sharedState.cacheManager.uncacheQuery(hbaseSession, viewDef, blocking = true)
-      sessionCatalog.dropGlobalTempView(viewName)
-    }
-  }
-
-  /**
-    * Recovers all the partitions in the directory of a table and update the catalog.
-    * Only works with a partitioned table, and not a temporary view.
-    *
-    * @param tableName is either a qualified or unqualified name that designates a table.
-    *                  If no database identifier is provided, it refers to a table in the
-    *                  current database.
-    * @group ddl_ops
-    * @since 2.1.1
-    */
-  override def recoverPartitions(tableName: String): Unit = {
+   * (Scala-specific)
+   * Creates a table based on the dataset in a data source, a schema and a set of options.
+   * Then, returns the corresponding DataFrame.
+   *
+   * @group ddl_ops
+   * @since 3.1.0
+   */
+  override def createTable(
+                            tableName: String,
+                            source: String,
+                            schema: StructType,
+                            description: String,
+                            options: Map[String, String]): DataFrame = {
     val tableIdent = hbaseSession.sessionState.sqlParser.parseTableIdentifier(tableName)
-    hbaseSession.sessionState.executePlan(
-      AlterTableRecoverPartitionsCommand(tableIdent)).toRdd
+    val storage = DataSource.buildStorageFormatFromOptions(options)
+    val tableType = if (storage.locationUri.isDefined) {
+      CatalogTableType.EXTERNAL
+    } else {
+      CatalogTableType.MANAGED
+    }
+    val tableDesc = CatalogTable(
+      identifier = tableIdent,
+      tableType = tableType,
+      storage = storage,
+      schema = schema,
+      provider = Some(source),
+      comment = {
+        if (description.isEmpty) None else Some(description)
+      }
+    )
+    val plan = CreateTable(tableDesc, SaveMode.ErrorIfExists, None)
+    hbaseSession.sessionState.executePlan(plan).toRdd
+    hbaseSession.table(tableIdent)
+  }
+
+
+  /**
+   * Drops the local temporary view with the given view name in the catalog.
+   * If the view has been cached/persisted before, it's also unpersisted.
+   *
+   * @param viewName the identifier of the temporary view to be dropped.
+   * @group ddl_ops
+   * @since 2.0.0
+   */
+  override def dropTempView(viewName: String): Boolean = {
+    hbaseSession.sessionState.catalog.dropTempView(viewName)
   }
 
   /**
-    * Returns true if the table or view is currently cached in-memory.
-    *
-    * @group cachemgmt
-    * @since 2.0.0
-    */
+   * Drops the global temporary view with the given view name in the catalog.
+   * If the view has been cached/persisted before, it's also unpersisted.
+   *
+   * @param viewName the identifier of the global temporary view to be dropped.
+   * @group ddl_ops
+   * @since 2.1.0
+   */
+  override def dropGlobalTempView(viewName: String): Boolean = {
+    hbaseSession.sessionState.catalog.dropGlobalTempView(viewName)
+  }
+
+  /**
+   * Recovers all the partitions in the directory of a table and update the catalog.
+   * Only works with a partitioned table, and not a temporary view.
+   *
+   * @param tableName is either a qualified or unqualified name that designates a table.
+   *                  If no database identifier is provided, it refers to a table in the
+   *                  current database.
+   * @group ddl_ops
+   * @since 2.1.1
+   */
+  override def recoverPartitions(tableName: String): Unit = {
+    val tableIdent = hbaseSession.sessionState.sqlParser.parseMultipartIdentifier(tableName)
+    hbaseSession.sessionState.executePlan(
+      RecoverPartitions(
+        UnresolvedTable(tableIdent, "recoverPartitions()", None))).toRdd
+  }
+
+  /**
+   * Returns true if the table or view is currently cached in-memory.
+   *
+   * @group cachemgmt
+   * @since 2.0.0
+   */
   override def isCached(tableName: String): Boolean = {
     hbaseSession.sharedState.cacheManager.lookupCachedData(hbaseSession.table(tableName)).nonEmpty
   }
 
   /**
-    * Caches the specified table or view in-memory.
-    *
-    * @group cachemgmt
-    * @since 2.0.0
-    */
+   * Caches the specified table or view in-memory.
+   *
+   * @group cachemgmt
+   * @since 2.0.0
+   */
   override def cacheTable(tableName: String): Unit = {
     hbaseSession.sharedState.cacheManager.cacheQuery(hbaseSession.table(tableName), Some(tableName))
   }
 
   /**
-    * Caches the specified table or view with the given storage level.
-    *
-    * @group cachemgmt
-    * @since 2.3.0
-    */
+   * Caches the specified table or view with the given storage level.
+   *
+   * @group cachemgmt
+   * @since 2.3.0
+   */
   override def cacheTable(tableName: String, storageLevel: StorageLevel): Unit = {
     hbaseSession.sharedState.cacheManager.cacheQuery(
       hbaseSession.table(tableName), Some(tableName), storageLevel)
   }
 
   /**
-    * Removes the specified table or view from the in-memory cache.
-    *
-    * @group cachemgmt
-    * @since 2.0.0
-    */
+   * Removes the specified table or view from the in-memory cache.
+   *
+   * @group cachemgmt
+   * @since 2.0.0
+   */
   override def uncacheTable(tableName: String): Unit = {
-    hbaseSession.sharedState.cacheManager.uncacheQuery(hbaseSession.table(tableName))
+    hbaseSession.catalog.uncacheTable(tableName)
   }
 
   /**
-    * Removes all cached tables or views from the in-memory cache.
-    *
-    * @group cachemgmt
-    * @since 2.0.0
-    */
+   * Removes all cached tables or views from the in-memory cache.
+   *
+   * @group cachemgmt
+   * @since 2.0.0
+   */
   override def clearCache(): Unit = {
     hbaseSession.sharedState.cacheManager.clearCache()
   }
 
   /**
-    * Returns true if the [[Dataset]] is currently cached in-memory.
-    *
-    * @group cachemgmt
-    * @since 2.0.0
-    */
+   * Returns true if the [[Dataset]] is currently cached in-memory.
+   *
+   * @group cachemgmt
+   * @since 2.0.0
+   */
   protected[sql] def isCached(qName: Dataset[_]): Boolean = {
     hbaseSession.sharedState.cacheManager.lookupCachedData(qName).nonEmpty
   }
 
   /**
-    * Invalidates and refreshes all the cached data and metadata of the given table or view.
-    * For Hive metastore table, the metadata is refreshed. For data source tables, the schema will
-    * not be inferred and refreshed.
-    *
-    * If this table is cached as an InMemoryRelation, drop the original cached version and make the
-    * new version cached lazily.
-    *
-    * @group cachemgmt
-    * @since 2.0.0
-    */
+   * Invalidates and refreshes all the cached data and metadata of the given table or view.
+   * For Hive metastore table, the metadata is refreshed. For data source tables, the schema will
+   * not be inferred and refreshed.
+   *
+   * If this table is cached as an InMemoryRelation, drop the original cached version and make the
+   * new version cached lazily.
+   *
+   * @group cachemgmt
+   * @since 2.0.0
+   */
   override def refreshTable(tableName: String): Unit = {
     val tableIdent = hbaseSession.sessionState.sqlParser.parseTableIdentifier(tableName)
     // Temp tables: refresh (or invalidate) any metadata/data cached in the plan recursively.
@@ -467,23 +514,91 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog {
     val table = hbaseSession.table(tableIdent)
     if (isCached(table)) {
       // Uncache the logicalPlan.
-      hbaseSession.sharedState.cacheManager.uncacheQuery(table, blocking = true)
+      hbaseSession.sharedState.cacheManager.uncacheQuery(table, cascade = true)
       // Cache it again.
       hbaseSession.sharedState.cacheManager.cacheQuery(table, Some(tableIdent.table))
     }
   }
 
   /**
-    * Refreshes the cache entry and the associated metadata for all Dataset (if any), that contain
-    * the given data source path. Path matching is by prefix, i.e. "/" would invalidate
-    * everything that is cached.
-    *
-    * @group cachemgmt
-    * @since 2.0.0
-    */
+   * Refreshes the cache entry and the associated metadata for all Dataset (if any), that contain
+   * the given data source path. Path matching is by prefix, i.e. "/" would invalidate
+   * everything that is cached.
+   *
+   * @group cachemgmt
+   * @since 2.0.0
+   */
   override def refreshByPath(resourcePath: String): Unit = {
     hbaseSession.sharedState.cacheManager.recacheByPath(hbaseSession, resourcePath)
   }
+
+  override def listNamespaces(): Array[Array[String]] = {
+    Array(sessionCatalog.listDatabases().toArray)
+  }
+
+  override def listNamespaces(namespace: Array[String]): Array[Array[String]] = namespace match {
+    case Array(db) if sessionCatalog.databaseExists(db) =>
+      Array(sessionCatalog.listDatabases(db).toArray)
+
+    case Array(_) =>
+      throw QueryCompilationErrors.noSuchNamespaceError(namespace)
+
+    case _ =>
+      throw QueryExecutionErrors.invalidNamespaceNameError(namespace)
+  }
+
+  override def loadNamespaceMetadata(namespace: Array[String]): util.Map[String, String] = namespace match {
+    case Array(db) if sessionCatalog.databaseExists(db) =>
+      sessionCatalog.getDatabaseMetadata(db).properties.asJava
+
+    case Array(_) =>
+      throw QueryCompilationErrors.noSuchNamespaceError(namespace)
+
+    case _ =>
+      throw QueryExecutionErrors.invalidNamespaceNameError(namespace)
+  }
+
+  override def createNamespace(namespace: Array[String], metadata: util.Map[String, String]): Unit = namespace match {
+    case Array(db) if !sessionCatalog.databaseExists(db) =>
+      sessionCatalog.createDatabase(CatalogDatabase(db, db + "description",
+        new URI(hbaseSession.config.get("hbase.rootdit") + s"/data/$db"),
+        metadata.asScala.toMap), ignoreIfExists = true)
+
+    case Array(_) =>
+      throw QueryCompilationErrors.namespaceAlreadyExistsError(namespace)
+
+    case _ =>
+      throw QueryExecutionErrors.invalidNamespaceNameError(namespace)
+  }
+
+  override def alterNamespace(namespace: Array[String], changes: NamespaceChange*): Unit = namespace match {
+    case Array(db) if sessionCatalog.databaseExists(db) =>
+      sessionCatalog.alterDatabase(CatalogDatabase(db, db + "description",
+        new URI(hbaseSession.config.get("hbase.rootdit") + s"/data/$db"), Map.empty))
+
+    case Array(_) =>
+      throw QueryCompilationErrors.namespaceAlreadyExistsError(namespace)
+
+    case _ =>
+      throw QueryExecutionErrors.invalidNamespaceNameError(namespace)
+  }
+
+  override def dropNamespace(namespace: Array[String]): Boolean = namespace match {
+    case Array(db) if sessionCatalog.databaseExists(db) =>
+      sessionCatalog.dropDatabase(db, ignoreIfNotExists = true, cascade = true)
+      true
+
+    case Array(_) =>
+      throw QueryCompilationErrors.noSuchNamespaceError(namespace)
+
+    case _ =>
+      throw QueryExecutionErrors.invalidNamespaceNameError(namespace)
+  }
+
+  override def initialize(name: String, options: CaseInsensitiveStringMap): Unit = {
+  }
+
+  override def name(): String = "hbase_catalog"
 }
 
 
@@ -493,10 +608,11 @@ private[sql] object CatalogImpl {
                                                               data: Seq[T],
                                                               sparkSession: SparkSession): Dataset[T] = {
     val enc = ExpressionEncoder[T]()
-    val encoded = data.map(d => enc.toRow(d).copy())
+    val serializer = enc.createSerializer()
+    val encoded = data.map(d => serializer(d).copy())
     val plan = new LocalRelation(enc.schema.toAttributes, encoded)
     val queryExecution = sparkSession.sessionState.executePlan(plan)
-    new Dataset[T](sparkSession, queryExecution, enc)
+    new Dataset[T](queryExecution, enc)
   }
 
 }

@@ -30,7 +30,7 @@ case class InsertIntoHBaseTable(
                                  overwrite: Boolean,
                                  ifNotExists: Boolean) extends RunnableCommand {
 
-  override protected def innerChildren: Seq[LogicalPlan] = query :: Nil
+  override def innerChildren: Seq[LogicalPlan] = query :: Nil
 
   /**
     * Inserts all the rows in the table into HBase.  Row objects are properly serialized with the
@@ -60,5 +60,10 @@ case class InsertIntoHBaseTable(
     // does not return anything for insert operations.
     // TODO: implement hbase compatibility as rules.
     Seq.empty[Row]
+  }
+
+  override protected def withNewChildrenInternal(newChildren: IndexedSeq[LogicalPlan]): LogicalPlan = {
+    assert(newChildren.size == 1, "Incorrect number of children")
+    copy(query = newChildren.head)
   }
 }
