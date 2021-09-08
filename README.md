@@ -20,15 +20,15 @@
 
 ## 程序部分截图如下：
 ### 1. show databases;
-![Image text](https://github.com/wangpy1995/Spark-SQL-HBase/tree/master/src/main/resources/show/show_databases.png)
+![Image text](https://github.com/wangpy1995/Spark-SQL-HBase/blob/master/src/main/resources/show/show_databases.png)
 ### 2. show tables;
-![Image text](https://github.com/wangpy1995/Spark-SQL-HBase/tree/master/src/main/resources/show/show_tables.png)
+![Image text](https://github.com/wangpy1995/Spark-SQL-HBase/blob/master/src/main/resources/show/show_tables.png)
 ### 3. select * from meta;
-![Image text](https://github.com/wangpy1995/Spark-SQL-HBase/tree/master/src/main/resources/show/select_from_meta.png)
+![Image text](https://github.com/wangpy1995/Spark-SQL-HBase/blob/master/src/main/resources/show/select_from_meta.png)
 ### 4. select * from wpy1.test where cf1_cf1_0 like "%24%";
-![Image text](https://github.com/wangpy1995/Spark-SQL-HBase/tree/master/src/main/resources/show/select_from_test_like.png)
+![Image text](https://github.com/wangpy1995/Spark-SQL-HBase/blob/master/src/main/resources/show/select_from_test_like.png)
 ### 5. select cf2_cf2_0 from wpy1.test where cf1_cf1_0 like "%24%";
-![Image text](https://github.com/wangpy1995/Spark-SQL-HBase/tree/master/src/main/resources/show/select_one_col_from_test_like.png)
+![Image text](https://github.com/wangpy1995/Spark-SQL-HBase/blob/master/src/main/resources/show/select_one_col_from_test_like.png)
 
 
 ####由于环境限制，程序还有许多部分未来得及测试，诸多不完善之处，还请大家多多提出宝贵意见
