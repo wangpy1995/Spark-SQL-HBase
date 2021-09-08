@@ -41,18 +41,8 @@ class HBaseClientImpl(
                        @(transient@param) val clientLoader: IsolatedClientLoader)
   extends HBaseClient
     with Logging{
-  def this(sparkConf: SparkConf, hadoopConf: Configuration) {
-    this(null, sparkConf, hadoopConf, null, null, null)
-  }
 
-  private val schemaPath = {
-    val in = getClass.getResourceAsStream("/spark_hbase.properties")
-    val props = new Properties()
-    props.load(in)
-    val url = props.getProperty("schema.file.url")
-    in.close()
-    url
-  }
+  private val schemaPath = extraConfig("schema.file.url")
 
   // Circular buffer to hold what hbase prints to STDOUT and ERR.  Only printed when failures occur.
   @transient private var outputBuffer = new CircularBuffer()
@@ -458,7 +448,7 @@ class HBaseClientImpl(
 
   /** Return a [[HBaseClient]] as new session, that will share the class loader and HBase client */
   override def newSession(): HBaseClient = {
-    clientLoader.createClient().asInstanceOf[HBaseClientImpl]
+    clientLoader.createClient()
   }
 
   /** Used for testing only.  Removes all data from this instance of HBase. */

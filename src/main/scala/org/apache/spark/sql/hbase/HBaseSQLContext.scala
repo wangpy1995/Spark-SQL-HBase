@@ -29,6 +29,7 @@ import scala.reflect.ClassTag
  */
 class HBaseSQLContext private[hbase](@(transient@param) _hbaseSession: HBaseSession,
                                      @transient val config: Configuration,
+                                     @transient extraConfig: Map[String, String],
                                      val tmpHdfsConfgFile: String = null)
   extends SQLContext(_hbaseSession) with Logging {
   self =>
@@ -54,11 +55,17 @@ class HBaseSQLContext private[hbase](@(transient@param) _hbaseSession: HBaseSess
   }
   LatestHBaseContextCache.latest = this
 
-  def this(sc: SparkContext) = {
-    this(new HBaseSession(LatestHBaseContextCache.withHBaseExternalCatalog(sc), new Configuration()), new Configuration())
+  def this(sc: SparkContext, extraConfig: Map[String, String]) = {
+    this(
+      new HBaseSession(
+        LatestHBaseContextCache.withHBaseExternalCatalog(sc),
+        new Configuration(),
+        extraConfig),
+      new Configuration(),
+      extraConfig)
   }
 
-  def this(sc: JavaSparkContext) = this(sc.sc)
+  def this(sc: JavaSparkContext, extraConfig: Map[String, String]) = this(sc.sc, extraConfig)
 
   /**
    * Returns a new HBaseContext as new session, which will have separated SQLConf, UDF/UDAF,
@@ -66,7 +73,7 @@ class HBaseSQLContext private[hbase](@(transient@param) _hbaseSession: HBaseSess
    * and HBase client (both of execution and metadata) with existing HBaseContext.
    */
   override def newSession(): HBaseSQLContext = {
-    new HBaseSQLContext(_hbaseSession.newSession(), self.config)
+    new HBaseSQLContext(_hbaseSession.newSession(), self.config, extraConfig)
   }
 
   /**
@@ -230,7 +237,10 @@ object LatestHBaseContextCache {
   var latest: HBaseSQLContext = _
 }
 
-class HBaseSession(@transient val sc: SparkContext, @transient val config: Configuration) extends SparkSession(sc) {
+class HBaseSession(
+                    @transient val sc: SparkContext,
+                    @transient val config: Configuration,
+                    @transient extraConfig: Map[String, String]) extends SparkSession(sc) {
   self =>
   @transient
   override lazy val sessionState: SessionState = {
@@ -238,26 +248,28 @@ class HBaseSession(@transient val sc: SparkContext, @transient val config: Confi
   }
 
   override def newSession(): HBaseSession = {
-    new HBaseSession(sc, config)
+    new HBaseSession(sc, config, extraConfig)
   }
 
   @transient override lazy val catalog: Catalog = new HBaseCatalogImpl(self)
 
-  @transient override lazy val sharedState: SharedState = new HBaseSharedState(sc, initialSessionOptions)
+  @transient override lazy val sharedState: SharedState = new HBaseSharedState(sc, initialSessionOptions, extraConfig)
 
-  override val sqlContext: HBaseSQLContext = new HBaseSQLContext(this, config)
+  override val sqlContext: HBaseSQLContext = new HBaseSQLContext(this, config, extraConfig)
 
 }
 
 private[hbase] class HBaseSharedState(
                                        val sc: SparkContext,
-                                       initialConfigs: scala.collection.Map[String, String])
+                                       initialConfigs: scala.collection.Map[String, String],
+                                       extraConfig: Map[String, String])
   extends SharedState(sc, initialConfigs) {
 
   override lazy val externalCatalog: ExternalCatalogWithListener = {
     val externalCatalog = new HBaseExternalCatalog(
       sc.conf,
-      sc.hadoopConfiguration)
+      HBaseConfiguration.create(),
+      extraConfig)
     val wrapped = new ExternalCatalogWithListener(externalCatalog)
     wrapped.addListener((event: ExternalCatalogEvent) => sparkContext.listenerBus.post(event))
     wrapped

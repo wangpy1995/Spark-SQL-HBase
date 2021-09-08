@@ -27,7 +27,7 @@ wpy1:test:
 hbase:meta:
   row:
     key: string
-  sn:
+  ns:
     d: string
   table:
     state: string

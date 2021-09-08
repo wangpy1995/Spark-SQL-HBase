@@ -57,7 +57,7 @@ case class HBaseTableScanExec(
       .mapPartitionsWithIndexInternal { (index, iter) =>
         val proj = UnsafeProjection.create(schema)
         val columnFamily = schema.map { field =>
-          val cf_q = field.name.split("_")
+          val cf_q = field.name.split("_",2)
           (Bytes.toBytes(cf_q.head), Bytes.toBytes(cf_q.last), genHBaseFieldConverter(field.dataType))
         }
         proj.initialize(index)
@@ -113,8 +113,11 @@ case class HBaseTableScanExec(
       else
         result.getValue(family, qualifier)
 
-      if (v == null) internalRow.update(i, null)
-      else convert(internalRow, i, v)
+      if (v == null) {
+        internalRow.update(i, null)
+      }else {
+        convert(internalRow, i, v)
+      }
       i += 1
     }
     internalRow

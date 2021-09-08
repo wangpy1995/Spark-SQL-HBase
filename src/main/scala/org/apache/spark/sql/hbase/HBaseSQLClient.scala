@@ -1,23 +1,33 @@
 package org.apache.spark.sql.hbase
 
 import java.io.File
-
 import jline.console.ConsoleReader
 import jline.console.history.FileHistory
 import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.hbase.HBaseConfiguration
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.SparkSession
+
+import java.util.Properties
 
 /**
   * Created by wpy on 17-5-18.
   */
 object HBaseSQLClient {
   val prompt = "HBaseSQL "
+  import scala.collection.JavaConverters._
+  private val extraConfigs = {
+    val in = getClass.getResourceAsStream("/spark_hbase.properties")
+    val props = new Properties()
+    props.load(in)
+    in.close()
+    props.asScala.toMap
+  }
   private val continuedPrompt = "".padTo(prompt.length, ' ')
-  private val sparkConf = new SparkConf().setMaster("local[*]").setAppName("test")
+  private val sparkConf = new SparkConf().setMaster("local[*]").setAppName("test").set("spark.hadoopRDD.ignoreEmptySplits","false")
   private val ss = SparkSession.builder().config(sparkConf).getOrCreate()
   private val sc = ss.sparkContext
-  val hc = new HBaseSession(sc, new Configuration())
+  val hc = new HBaseSession(sc, new Configuration(),extraConfigs)
 
   def main(args: Array[String]): Unit = {
 

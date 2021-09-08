@@ -5,21 +5,21 @@ import org.apache.spark.SparkConf
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.expressions.Expression
-import org.apache.spark.sql.hbase.client.HBaseClientImpl
+import org.apache.spark.sql.hbase.client.{HBaseClient, IsolatedClientLoader}
 import org.apache.spark.sql.types.StructType
 
 /**
-  * Created by wpy on 17-5-16.
-  */
-class HBaseExternalCatalog(conf: SparkConf, hadoopConf: Configuration)
+ * Created by wpy on 17-5-16.
+ */
+class HBaseExternalCatalog(conf: SparkConf, hadoopConf: Configuration, extraConfig: Map[String, String])
   extends ExternalCatalog
     with Logging {
 
   import CatalogTypes.TablePartitionSpec
 
   //TODO get it from config
-  //  val client: HBaseClient = IsolatedClientLoader.forVersion("2.0", "2.7.1", conf, hadoopConf).createClient()
-  val client = new HBaseClientImpl(conf, hadoopConf)
+  val client: HBaseClient = IsolatedClientLoader.forVersion("3.0.0", "3.2.0", conf, hadoopConf, extraConfig).createClient()
+  //  val client = new HBaseClientImpl(conf, hadoopConf)
 
   override def createDatabase(dbDefinition: CatalogDatabase, ignoreIfExists: Boolean): Unit = {
     client.createDatabase(dbDefinition, ignoreIfExists)
@@ -75,7 +75,7 @@ class HBaseExternalCatalog(conf: SparkConf, hadoopConf: Configuration)
   }
 
   override def getTablesByName(db: String, tables: Seq[String]): Seq[CatalogTable] = {
-    tables.map(getTable(db,_))
+    tables.map(getTable(db, _))
   }
 
   override def tableExists(db: String, table: String): Boolean = {

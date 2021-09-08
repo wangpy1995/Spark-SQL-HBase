@@ -15,7 +15,7 @@ private[hbase] object TConstants {
   private[hbase] lazy val conn = ConnectionFactory.createConnection(hConf)
   private[hbase] lazy val admin = conn.getAdmin
 
-  private[hbase] lazy val sparkConf = new SparkConf().setMaster("local[*]").setAppName("test")
+  private[hbase] lazy val sparkConf = new SparkConf().setMaster("local[*]").setAppName("test").set("spark.hadoopRDD.ignoreEmptySplits","false")
   private[hbase] lazy val ss = SparkSession.builder().config(sparkConf).getOrCreate()
   private[hbase] lazy val sc = ss.sparkContext
 }

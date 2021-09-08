@@ -56,13 +56,13 @@ object TestHBase {
     conn.close()
   }
 
-  def scan(): Unit ={
+  def scan(): Unit = {
     import scala.collection.JavaConverters._
-    val scan= new Scan()
-//    scan.withStartRow(Bytes.toBytes("")).withStopRow(Bytes.toBytes(""))
+    val scan = new Scan()
+    //    scan.withStartRow(Bytes.toBytes("")).withStopRow(Bytes.toBytes(""))
     scan.addFamily(Bytes.toBytes("cf1"))
     scan.addFamily(Bytes.toBytes("cf2"))
-    val cnt = conn.getTable(TableName.valueOf("wpy1:test")).getScanner(scan).iterator().asScala.count(_=>true)
+    val cnt = conn.getTable(TableName.valueOf("wpy1:test")).getScanner(scan).iterator().asScala.count(_ => true)
     println(cnt)
     conn.close()
   }
@@ -71,7 +71,7 @@ object TestHBase {
   def main(args: Array[String]): Unit = {
     //    createUserNamespaceAndTable()
     //    insertData()
-    scan()
+    //    scan()
   }
 
 }

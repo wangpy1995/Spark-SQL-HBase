@@ -4,11 +4,10 @@ import java.io.File
 import java.lang.reflect.InvocationTargetException
 import java.net.{URL, URLClassLoader}
 import java.util
-
 import org.apache.commons.io.{FileUtils, IOUtils}
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.hbase.HConstants
-import org.apache.spark.SparkConf
+import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.deploy.SparkSubmitUtils
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.internal.NonClosableMutableURLClassLoader
@@ -19,7 +18,7 @@ import org.apache.spark.util.{MutableURLClassLoader, Utils}
  */
 private[hbase] object IsolatedClientLoader extends Logging {
   /**
-   * Creates isolated Hive client loaders by downloading the requested version from maven.
+   * Creates isolated HBase client loaders by downloading the requested version from maven.
    */
   def forVersion(
                   version: String,
@@ -47,9 +46,9 @@ private[hbase] object IsolatedClientLoader extends Logging {
             // version cannot be resolved.
             logWarning(s"Failed to resolve Hadoop artifacts for the version $hadoopVersion. " +
               s"We will change the hadoop version from $hadoopVersion to 2.6.0 and try again. " +
-              "Hadoop classes will not be shared between Spark and Hive metastore client. " +
-              "It is recommended to set jars used by Hive metastore client through " +
-              "spark.sql.hive.metastore.jars in the production environment.")
+              "Hadoop classes will not be shared between Spark and HBase metastore client. " +
+              "It is recommended to set jars used by HBase metastore client through " +
+              "spark.sql.HBase.metastore.jars in the production environment.")
             sharesHadoopClasses = false
             (downloadVersion(resolvedVersion, "2.6.5", ivyPath), "2.6.5")
         }
@@ -82,7 +81,7 @@ private[hbase] object IsolatedClientLoader extends Logging {
                                ivyPath: Option[String]): Seq[URL] = {
     val hbaseArtifacts = version.extraDeps ++
       Seq("hbase-client", "hbase-common", "hbase-server",
-        "hbase-hadoop-compat", "hbase-hadoop2-compat",
+        "hbase-hadoop-compat",
         "hbase-metrics", "hbase-metrics-api")
         .map(a => s"org.apache.hbase:$a:${version.fullVersion}") ++
       Seq("com.google.guava:guava:14.0.1",
@@ -106,7 +105,7 @@ private[hbase] object IsolatedClientLoader extends Logging {
     tempDir.listFiles().map(_.toURI.toURL)
   }
 
-  // A map from a given pair of HiveVersion and Hadoop version to jar files.
+  // A map from a given pair of HBaseVersion and Hadoop version to jar files.
   // It is only used by forVersion.
   private val resolvedVersions =
   new scala.collection.mutable.HashMap[(HBaseVersion, String), Seq[URL]]
@@ -126,10 +125,10 @@ private[hbase] class IsolatedClientLoader(
                                            val barrierPrefixes: Seq[String] = Seq.empty)
   extends Logging {
 
-  // Check to make sure that the root classloader does not know about Hive.
-  //  assert(Try(rootClassLoader.loadClass("org.apache.hadoop.hive.conf.HiveConf")).isFailure)
+  // Check to make sure that the root classloader does not know about HBase.
+  //  assert(Try(rootClassLoader.loadClass("org.apache.hadoop.HBase.conf.HBaseConf")).isFailure)
 
-  /** All jars used by the hive specific classloader. */
+  /** All jars used by the HBase specific classloader. */
   protected def allJars: Array[URL] = execJars.toArray
 
   protected def isSharedClass(name: String): Boolean = {
@@ -144,10 +143,11 @@ private[hbase] class IsolatedClientLoader(
       (name.startsWith("com.google") && !name.startsWith("com.google.cloud")) ||
       name.startsWith("java.lang.") ||
       name.startsWith("java.net") ||
+      name.startsWith("org.yaml.snakeyaml") ||
       sharedPrefixes.exists(name.startsWith)
   }
 
-  /** True if `name` refers to a spark class that must see specific version of Hive. */
+  /** True if `name` refers to a spark class that must see specific version of HBase. */
   protected def isBarrierClass(name: String): Boolean =
     name.startsWith(classOf[HBaseClientImpl].getName) ||
       barrierPrefixes.exists(name.startsWith)
@@ -156,51 +156,55 @@ private[hbase] class IsolatedClientLoader(
     name.replaceAll("\\.", "/") + ".class"
 
   /**
-   * The classloader that is used to load an isolated version of Hive.
+   * The classloader that is used to load an isolated version of HBase.
    * This classloader is a special URLClassLoader that exposes the addURL method.
    * So, when we add jar, we can add this new jar directly through the addURL method
    * instead of stacking a new URLClassLoader on top of it.
    */
   private[hbase] val classLoader: MutableURLClassLoader = {
-    val isolatedClassLoader =
-      if (isolationOn) {
-        new URLClassLoader(allJars, rootClassLoader) {
-          override def loadClass(name: String, resolve: Boolean): Class[_] = {
-            val loaded = findLoadedClass(name)
-            if (loaded == null) doLoadClass(name, resolve) else loaded
-          }
-
-          def doLoadClass(name: String, resolve: Boolean): Class[_] = {
-            val classFileName = name.replaceAll("\\.", "/") + ".class"
-            if (isBarrierClass(name)) {
-              // For barrier classes, we construct a new copy of the class.
-              val bytes = IOUtils.toByteArray(baseClassLoader.getResourceAsStream(classFileName))
-              logDebug(s"custom defining: $name - ${util.Arrays.hashCode(bytes)}")
-              defineClass(name, bytes, 0, bytes.length)
-            } else if (!isSharedClass(name)) {
-              logDebug(s"hbase class: $name - ${getResource(classToPath(name))}")
-              super.loadClass(name, resolve)
-            } else {
-              // For shared classes, we delegate to baseClassLoader, but fall back in case the
-              // class is not found.
-              logDebug(s"shared class: $name")
-              try {
-                baseClassLoader.loadClass(name)
-              } catch {
-                case _: ClassNotFoundException =>
-                  super.loadClass(name, resolve)
-              }
-            }
-          }
-        }
-      } else {
-        baseClassLoader
-      }
+    //    val isolatedClassLoader = {
+    //      if (isolationOn) {
+    //        new URLClassLoader(allJars, rootClassLoader) {
+    //          override def loadClass(name: String, resolve: Boolean): Class[_] = {
+    //            val loaded = findLoadedClass(name)
+    //            if (loaded == null) doLoadClass(name, resolve) else loaded
+    //          }
+    //
+    //          def doLoadClass(name: String, resolve: Boolean): Class[_] = {
+    //            val classFileName = name.replaceAll("\\.", "/") + ".class"
+    //            if (isBarrierClass(name)) {
+    //              // For barrier classes, we construct a new copy of the class.
+    //              val bytes = IOUtils.toByteArray(baseClassLoader.getResourceAsStream(classFileName))
+    //              logDebug(s"custom defining: $name - ${util.Arrays.hashCode(bytes)}")
+    //              defineClass(name, bytes, 0, bytes.length)
+    //            } else if (!isSharedClass(name)) {
+    //              logDebug(s"hbase class: $name - ${getResource(classToPath(name))}")
+    //              super.loadClass(name, resolve)
+    //            } else {
+    //              // For shared classes, we delegate to baseClassLoader, but fall back in case the
+    //              // class is not found.
+    //              logDebug(s"shared class: $name")
+    //              try {
+    //                baseClassLoader.loadClass(name)
+    //              } catch {
+    //                case _: ClassNotFoundException =>
+    //                  super.loadClass(name, resolve)
+    //              }
+    //            }
+    //          }
+    //        }
+    //      } else {
+    //        baseClassLoader
+    //      }
+    //    }
     // Right now, we create a URLClassLoader that gives preference to isolatedClassLoader
     // over its own URLs when it loads classes and resources.
     // We may want to use ChildFirstURLClassLoader based on
     // the configuration of spark.executor.userClassPathFirst, which gives preference
     // to its own URLs over the parent class loader (see Executor's createClassLoader method).
+
+    //这里使用spark默认的classLoader防止出现不同classLoader对同一个class重复load的错误
+    val isolatedClassLoader = Utils.getContextOrSparkClassLoader
     new NonClosableMutableURLClassLoader(isolatedClassLoader)
   }
 
@@ -208,7 +212,7 @@ private[hbase] class IsolatedClientLoader(
     classLoader.addURL(path)
   }
 
-  /** The isolated client interface to Hive. */
+  /** The isolated client interface to HBase. */
   private[hbase] def createClient(): HBaseClient = {
     if (!isolationOn) {
       return new HBaseClientImpl(version, sparkConf, hadoopConf, config, baseClassLoader, this)
@@ -219,10 +223,10 @@ private[hbase] class IsolatedClientLoader(
     Thread.currentThread.setContextClassLoader(classLoader)
 
     try {
-      classLoader
-        .loadClass(classOf[HBaseClientImpl].getName)
-        .getConstructors.head
-        .newInstance(version, sparkConf, hadoopConf, config, classLoader, this)
+      val clsLoader = classLoader
+        .loadClass(config.getOrElse("spark.hbase.client.impl", classOf[HBaseClientImpl].getName))
+      val constructor = clsLoader.getConstructors.head
+      constructor.newInstance(version, sparkConf, hadoopConf, config, classLoader, this)
         .asInstanceOf[HBaseClient]
     } catch {
       case e: InvocationTargetException =>
@@ -230,7 +234,7 @@ private[hbase] class IsolatedClientLoader(
           case cnf: NoClassDefFoundError =>
             throw new ClassNotFoundException(
               s"$cnf when creating HBase client using classpath: ${execJars.mkString(", ")}\n" +
-                "Please make sure that jars for your version of hive and hadoop are included in the " +
+                "Please make sure that jars for your version of HBase and hadoop are included in the " +
                 s"paths passed to ${HConstants.VERSION_FILE_NAME}.", e)
           case _ =>
             throw e
@@ -241,7 +245,7 @@ private[hbase] class IsolatedClientLoader(
   }
 
   /**
-   * The place holder for shared Hive client for all the HiveContext sessions (they share an
+   * The place holder for shared HBase client for all the HBaseContext sessions (they share an
    * IsolatedClientLoader).
    */
   private[hbase] var cachedConnection: Any = _
