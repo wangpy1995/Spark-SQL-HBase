@@ -277,6 +277,7 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog with Supports
    */
   @Experimental
   override def createTable(tableName: String, path: String): DataFrame = {
+    // 这个方法会创建parquet table
     val dataSourceName = hbaseSession.sessionState.conf.defaultDataSourceName
     createTable(tableName, path, dataSourceName)
   }
@@ -291,6 +292,7 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog with Supports
    */
   @Experimental
   override def createTable(tableName: String, path: String, source: String): DataFrame = {
+    // 根据source创建表, source="hbase"时会创建hbase表
     createTable(tableName, source, Map("path" -> path))
   }
 
@@ -326,23 +328,11 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog with Supports
                             source: String,
                             schema: StructType,
                             options: Map[String, String]): DataFrame = {
-    val tableIdent = hbaseSession.sessionState.sqlParser.parseTableIdentifier(tableName)
-    val storage = DataSource.buildStorageFormatFromOptions(options)
-    val tableType = if (storage.locationUri.isDefined) {
-      CatalogTableType.EXTERNAL
-    } else {
-      CatalogTableType.MANAGED
-    }
-    val tableDesc = CatalogTable(
-      identifier = tableIdent,
-      tableType = tableType,
-      storage = storage,
+    createTable(tableName= tableName,
+      source= source,
       schema = schema,
-      provider = Some(source)
-    )
-    val plan = CreateTable(tableDesc, SaveMode.ErrorIfExists, None)
-    hbaseSession.sessionState.executePlan(plan).toRdd
-    hbaseSession.table(tableIdent)
+      description = "",
+      options = options)
   }
 
   override def createTable(

@@ -11,13 +11,15 @@ import org.apache.spark.sql.types.StructType
 /**
  * Created by wpy on 17-5-16.
  */
-class HBaseExternalCatalog(conf: SparkConf, hadoopConf: Configuration, extraConfig: Map[String, String])
+class HBaseExternalCatalog(
+                            conf: SparkConf,
+                            hadoopConf: Configuration,
+                            extraConfig: Map[String, String])
   extends ExternalCatalog
     with Logging {
 
   import CatalogTypes.TablePartitionSpec
 
-  //TODO get it from config
   val client: HBaseClient = IsolatedClientLoader.forVersion("3.0.0", "3.2.0", conf, hadoopConf, extraConfig).createClient()
   //  val client = new HBaseClientImpl(conf, hadoopConf)
 

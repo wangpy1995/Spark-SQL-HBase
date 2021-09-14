@@ -7,9 +7,7 @@ import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.expressions.{Alias, UpCast}
 import org.apache.spark.sql.catalyst.parser.ParserInterface
 import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, Project, SubqueryAlias, View}
-import org.apache.spark.sql.connector.catalog.CatalogManager
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
 import java.util.Locale
 
@@ -38,6 +36,11 @@ private[sql] class HBaseSessionCatalog(
     super.refreshTable(name)
   }
 
+  /**
+   * 通过table名返回对应table的logical plan
+   * @param name
+   * @return
+   */
   override def lookupRelation(name: TableIdentifier): LogicalPlan = {
     synchronized {
       val db = formatDatabaseName(name.database.getOrElse(currentDb))
@@ -59,33 +62,23 @@ private[sql] class HBaseSessionCatalog(
             child = parser.parsePlan(viewText))
           SubqueryAlias(table, child)
         } else {
-          getRelation(metadata)
+          if (metadata.provider.isDefined && metadata.provider.get.toLowerCase(Locale.ROOT).equals("hbase")) {
+            // 数据源是HBase, 生成HBasePlan
+            val tablePlan = HBasePlan(
+              metadata,
+              // we assume all the columns are nullable.
+              metadata.schema.toAttributes,
+              metadata.dataSchema.asNullable.toAttributes,
+              metadata.partitionSchema.asNullable.toAttributes)
+            SubqueryAlias(table, tablePlan)
+          } else{
+            // 数据源不是HBase, 生成其他外部数据源的Table
+            getRelation(metadata)
+          }
         }
       } else {
         SubqueryAlias(table, getTempViewPlan(tempViews(table)))
       }
-    }
-  }
-
-  override def getRelation(metadata: CatalogTable, options: CaseInsensitiveStringMap): LogicalPlan = {
-    val name = metadata.identifier
-    val db = formatDatabaseName(name.database.getOrElse(currentDb))
-    val table = formatTableName(name.table)
-    val multiParts = Seq(CatalogManager.SESSION_CATALOG_NAME, db, table)
-
-    if (metadata.tableType == CatalogTableType.VIEW) {
-      // The relation is a view, so we wrap the relation by:
-      // 1. Add a [[View]] operator over the relation to keep track of the view desc;
-      // 2. Wrap the logical plan in a [[SubqueryAlias]] which tracks the name of the view.
-      SubqueryAlias(multiParts, fromCatalogTable(metadata, isTempView = false))
-    } else {
-      val tablePlan = HBasePlan(
-        metadata,
-        // we assume all the columns are nullable.
-        metadata.schema.toAttributes,
-        metadata.dataSchema.asNullable.toAttributes,
-        metadata.partitionSchema.asNullable.toAttributes)
-      SubqueryAlias(table, tablePlan)
     }
   }
 

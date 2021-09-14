@@ -50,14 +50,13 @@ case class HBaseTableScanExec(
     //TODO need more smaller scans rather than the map split
     val scan = new Scan()
     val numOutputRows = longMetric("numOutputRows")
-    val hbaseFilter = buildHBaseFilterList4Where(filter.headOption)
-    addColumnFamiliesToScan(scan, hbaseFilter, filter.headOption, requestedAttributes)
-    val dataTypes = schema.map(_.dataType)
+    val hbaseFilter = combineHBaseFilterList(filter.map(f => buildHBaseFilterList4Where(Some(f))))
+    addColumnFamiliesToScan(scan, hbaseFilter, filter, requestedAttributes)
     hbaseSession.sqlContext.hbaseRDD(TableName.valueOf(tableName), scan)
       .mapPartitionsWithIndexInternal { (index, iter) =>
         val proj = UnsafeProjection.create(schema)
         val columnFamily = schema.map { field =>
-          val cf_q = field.name.split("_",2)
+          val cf_q = field.name.split("_", 2)
           (Bytes.toBytes(cf_q.head), Bytes.toBytes(cf_q.last), genHBaseFieldConverter(field.dataType))
         }
         proj.initialize(index)
@@ -115,7 +114,7 @@ case class HBaseTableScanExec(
 
       if (v == null) {
         internalRow.update(i, null)
-      }else {
+      } else {
         convert(internalRow, i, v)
       }
       i += 1
@@ -124,12 +123,23 @@ case class HBaseTableScanExec(
   }
 
   //columnFamily_QualifierName <=== requestAttribute
-  def addColumnFamiliesToScan(scan: Scan, filters: Option[Filter], predicate: Option[Expression], projectionList: Seq[NamedExpression]): Scan = {
+  def addColumnFamiliesToScan(scan: Scan, filters: Option[Filter], predicate: Seq[Expression], projectionList: Seq[NamedExpression]): Scan = {
+    // 添加需要显示结果的列
     requestedAttributes.foreach { qualifier =>
       val column_qualifier = qualifier.name.split("_", 2)
       if (qualifier.name != "row_key")
-        scan.addColumn(column_qualifier.head.getBytes, column_qualifier.last.getBytes)
+        scan.addColumn(Bytes.toBytes(column_qualifier.head), Bytes.toBytes(column_qualifier.last))
     }
+    // 添加需要过滤的列
+    predicate.foreach { qualifier =>
+      val column_qualifiers = qualifier.references.map(_.toAttribute).toSet
+      column_qualifiers.foreach { qualifier =>
+        val column_qualifier = qualifier.name.split("_", 2)
+        if (qualifier.name != "row_key")
+          scan.addColumn(Bytes.toBytes(column_qualifier.head), Bytes.toBytes(column_qualifier.last))
+      }
+    }
+    //
     scan.setCaching(1000)
     scan.readAllVersions()
     if (filters.isDefined) {
@@ -146,8 +156,7 @@ case class HBaseTableScanExec(
       val size = filterList.getFilters.size
       if (size == 1 || filterList.getOperator == operator) {
         filterList.getFilters.asScala.map(filters.add)
-      }
-      else {
+      } else {
         filters.add(filterList)
       }
     }
@@ -160,8 +169,7 @@ case class HBaseTableScanExec(
       val filter = new SingleColumnValueFilter(Bytes.toBytes(col_qualifier.head), Bytes.toBytes(col_qualifier.last), CompareOperator.EQUAL, new NullComparator())
       filter.setFilterIfMissing(true)
       Some(new FilterList(filter))
-    }
-    else {
+    } else {
       None
     }
   }
@@ -173,8 +181,7 @@ case class HBaseTableScanExec(
       val filter = new SingleColumnValueFilter(Bytes.toBytes(col_qualifier.head), Bytes.toBytes(col_qualifier.last), CompareOperator.NOT_EQUAL, new NullComparator())
       filter.setFilterIfMissing(true)
       Some(new FilterList(filter))
-    }
-    else {
+    } else {
       None
     }
   }
@@ -194,30 +201,46 @@ case class HBaseTableScanExec(
   }
 
   def createSingleColumnValueFilter(left: AttributeReference, right: Literal, compareOp: CompareOperator, comparable: ByteArrayComparable = null): Option[FilterList] = {
-    val nonKeyColumn = requestedAttributes.find(_.name == left.name)
-
+    val nonKeyColumn = plan.dataCols.find(_.name == left.name)
     if (nonKeyColumn.isDefined) {
-      val column = nonKeyColumn.get.name.split("_", 2)
-      val nullComparable = comparable == null
-
-      var filter = new SingleColumnValueFilter(Bytes.toBytes(column.head), Bytes.toBytes(column.last), compareOp, new BinaryComparator(getBinaryValue(right)))
-      val filter1 = new SingleColumnValueFilter(Bytes.toBytes(column.head), Bytes.toBytes(column.last), compareOp, comparable)
-
-      if (!nullComparable) filter = filter1
-
-      filter.setFilterIfMissing(true)
-      Some(new FilterList(filter))
-    }
-    else {
+      val hbaseFilter = if (nonKeyColumn.get.name == "row_key") {
+        // 当使用row_key作为过滤条件时使用RowFilter加快查询速度
+        if (comparable != null) {
+          new RowFilter(compareOp, comparable)
+        } else {
+          new RowFilter(compareOp, new BinaryComparator(getBinaryValue(right)))
+        }
+      } else {
+        val column = nonKeyColumn.get.name.split("_", 2)
+        val kvFilter = if (comparable != null) {
+          new SingleColumnValueFilter(Bytes.toBytes(column.head), Bytes.toBytes(column.last), compareOp, comparable)
+        } else {
+          new SingleColumnValueFilter(Bytes.toBytes(column.head), Bytes.toBytes(column.last), compareOp, new BinaryComparator(getBinaryValue(right)))
+        }
+        kvFilter.setFilterIfMissing(true)
+        kvFilter
+      }
+      // 这里设置为false会导致查询cf1过滤条件为cf2时，hbase不进行过滤
+      Some(new FilterList(hbaseFilter))
+    } else {
       None
+    }
+  }
+
+  def combineHBaseFilterList(filterLists: Seq[Option[FilterList]]): Option[Filter] = {
+    val filterList = new FilterList()
+    filterLists.foreach { case Some(filter) => filterList.addFilter(filter) }
+    if (filterList.getFilters.isEmpty) {
+      None
+    } else {
+      Some(filterList)
     }
   }
 
   def buildHBaseFilterList4Where(filter: Option[Expression]): Option[FilterList] = {
     if (filter.isEmpty) {
       None
-    }
-    else {
+    } else {
       val expression = filter.get
       expression match {
         case And(left, right) =>

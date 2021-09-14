@@ -3,19 +3,21 @@ package org.apache.spark.sql.hbase
 import java.util.Locale
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql._
-import org.apache.spark.sql.catalyst.catalog.CatalogTable
+import org.apache.spark.sql.catalyst.catalog.{CatalogTable, SessionCatalog, UnresolvedCatalogRelation}
 import org.apache.spark.sql.catalyst.expressions.{And, Attribute, AttributeMap, AttributeReference, AttributeSet, Expression, GenericInternalRow, NamedExpression}
 import org.apache.spark.sql.catalyst.planning.PhysicalOperation
-import org.apache.spark.sql.catalyst.plans.logical.{InsertIntoStatement, LogicalPlan}
+import org.apache.spark.sql.catalyst.plans.logical.{InsertIntoStatement, LogicalPlan, SubqueryAlias}
 import org.apache.spark.sql.catalyst.rules.Rule
-import org.apache.spark.sql.catalyst.{CatalystTypeConverters, InternalRow, expressions}
+import org.apache.spark.sql.catalyst.{CatalystTypeConverters, InternalRow, QualifiedTableName, expressions}
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.command.{CreateTableCommand, ExecutedCommandExec}
 import org.apache.spark.sql.execution.datasources.DataSourceStrategy.selectFilters
-import org.apache.spark.sql.execution.datasources.{CreateTable, InsertIntoDataSourceCommand, InsertIntoHadoopFsRelationCommand, LogicalRelation}
-import org.apache.spark.sql.hbase.execution.{CreateHBaseTableAsSelectCommand, HBaseTableScanExec, InsertIntoHBaseTable}
+import org.apache.spark.sql.execution.datasources.{CreateTable, DataSource, DataSourceUtils, InsertIntoDataSourceCommand, InsertIntoHadoopFsRelationCommand, LogicalRelation}
+import org.apache.spark.sql.hbase.catalog.HBaseTableRelation
+import org.apache.spark.sql.hbase.execution.{CreateHBaseTableAsSelectCommand, HBaseFileFormat, HBaseTableScanExec, InsertIntoHBaseTable}
 import org.apache.spark.sql.sources.{Filter, PrunedFilteredScan}
 import org.apache.spark.sql.types.{DataType, StructType}
+import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -28,20 +30,19 @@ private[hbase] trait HBaseStrategies {
   val sparkSession: SparkSession
 
   object HBaseDataSource extends Strategy {
-    def apply(plan: LogicalPlan): Seq[SparkPlan] = {
-      plan match {
-        case PhysicalOperation(projects, filters, l@LogicalRelation(t: PrunedFilteredScan, _, _, _)) =>
-          pruneFilterProject(
-            l,
-            projects,
-            filters,
-            (a, f) => toCatalystRDD(l, a, t.buildScan(a.map(_.name).toArray, f))) :: Nil
-        case CreateHBaseTableAsSelectCommand(tableDesc, query, mode) =>
-          val cmd = CreateHBaseTableAsSelectCommand(tableDesc, query, mode
-          )
-          ExecutedCommandExec(cmd) :: Nil
-        case _ => Nil
-      }
+    def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
+      case PhysicalOperation(projects, filters, l@LogicalRelation(t: PrunedFilteredScan, _, _, _))
+        if l.catalogTable.isDefined && HBaseAnalysis.isHBaseTable(l.catalogTable.get) =>
+        pruneFilterProject(
+          l,
+          projects,
+          filters,
+          (a, f) => toCatalystRDD(l, a, t.buildScan(a.map(_.name).toArray, f))) :: Nil
+      case CreateHBaseTableAsSelectCommand(tableDesc, query, mode)
+        if HBaseAnalysis.isHBaseTable(tableDesc) =>
+        val cmd = CreateHBaseTableAsSelectCommand(tableDesc, query, mode)
+        ExecutedCommandExec(cmd) :: Nil
+      case _ => Nil
     }
 
     /**
@@ -187,7 +188,12 @@ private[hbase] trait HBaseStrategies {
 
   object HBaseTableScans extends Strategy {
     override def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
-      case PhysicalOperation(projectList, filter, plan: HBasePlan) =>
+      case PhysicalOperation(projectList, filter, h@HBaseTableRelation(tableMeta, dataCols, _, _, _))
+        if HBaseAnalysis.isHBaseTable(tableMeta) =>
+        val plan = HBasePlan(tableMeta, dataCols, h.output, h.partitionCols)
+        filterProject4HBase(plan, projectList, filter) :: Nil
+      case PhysicalOperation(projectList, filter, plan: HBasePlan)
+        if HBaseAnalysis.isHBaseTable(plan.tableMeta) =>
         /*  pruneFilterProject(
             projectList,
             filter,
@@ -217,8 +223,8 @@ private[hbase] trait HBaseStrategies {
       val requestedColumns = projectList.asInstanceOf[Seq[Attribute]].map(attributeMap)
       HBaseTableScanExec(requestedColumns, plan, filters)(sparkSession.asInstanceOf[HBaseSession])
     } else {
-      //val requestedColumns = projectSet.map(relation.attributeMap ).toSeq
-      val requestedColumns = attributeMap.keySet.toSeq
+      val requestedColumns = projectSet.toSeq
+      //      val requestedColumns = attributeMap.keySet.toSeq
       val scan = HBaseTableScanExec(requestedColumns, plan, filters)(sparkSession.asInstanceOf[HBaseSession])
       ProjectExec(projectList, scan)
     }
@@ -246,5 +252,22 @@ object HBaseAnalysis extends Rule[LogicalPlan] {
 
   def isHBaseTable(table: CatalogTable): Boolean = {
     table.provider.isDefined && table.provider.get.toLowerCase(Locale.ROOT) == "hbase"
+  }
+}
+
+class ResolveHBaseTable(sparkSession: SparkSession) extends Rule[LogicalPlan] {
+
+  def readHBaseTable(table: CatalogTable, extraOptions: CaseInsensitiveStringMap): LogicalPlan = {
+    HBasePlan(
+      table,
+      table.dataSchema.asNullable.toAttributes,
+      table.dataSchema.asNullable.toAttributes,
+      table.partitionSchema.asNullable.toAttributes)
+  }
+
+  override def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperators {
+    case UnresolvedCatalogRelation(tableMeta, options, false)
+      if HBaseAnalysis.isHBaseTable(tableMeta) =>
+      readHBaseTable(tableMeta, options)
   }
 }

@@ -27,11 +27,22 @@ import scala.reflect.ClassTag
 /**
  * Created by wpy on 17-5-16.
  */
-class HBaseSQLContext private[hbase](@(transient@param) _hbaseSession: HBaseSession,
-                                     @transient val config: Configuration,
-                                     @transient extraConfig: Map[String, String],
-                                     val tmpHdfsConfgFile: String = null)
-  extends SQLContext(_hbaseSession) with Logging {
+
+/**
+ * 扩展SparkSQLContext功能, 提供对HBase的支持
+ *
+ * @param _hbaseSession
+ * @param config
+ * @param extraConfig
+ * @param tmpHdfsConfigFile
+ */
+class HBaseSQLContext private[hbase](
+                                      @(transient@param) _hbaseSession: HBaseSession,
+                                      @transient val config: Configuration,
+                                      @transient extraConfig: Map[String, String],
+                                      val tmpHdfsConfigFile: String = null)
+  extends SQLContext(_hbaseSession)
+    with Logging {
   self =>
   @transient private var tmpHdfsConfiguration: Configuration = config
   @transient private var appliedCredentials = false
@@ -42,15 +53,15 @@ class HBaseSQLContext private[hbase](@(transient@param) _hbaseSession: HBaseSess
   private val credentialsConf = _hbaseSession.sparkContext.broadcast(new SerializableWritable(job.getCredentials))
 
 
-  if (tmpHdfsConfgFile != null && config != null) {
+  if (tmpHdfsConfigFile != null && config != null) {
     val fs = FileSystem.newInstance(config)
-    val tmpPath = new Path(tmpHdfsConfgFile)
+    val tmpPath = new Path(tmpHdfsConfigFile)
     if (!fs.exists(tmpPath)) {
       val outputStream = fs.create(tmpPath)
       config.write(outputStream)
       outputStream.close()
     } else {
-      logWarning("tmpHdfsConfigDir " + tmpHdfsConfgFile + " exist!!")
+      logWarning("tmpHdfsConfigDir " + tmpHdfsConfigFile + " exist!!")
     }
   }
   LatestHBaseContextCache.latest = this
@@ -62,10 +73,15 @@ class HBaseSQLContext private[hbase](@(transient@param) _hbaseSession: HBaseSess
         new Configuration(),
         extraConfig),
       new Configuration(),
-      extraConfig)
+      extraConfig,
+      null)
   }
 
+  def this(sc: SparkContext) = this(sc, Map.empty[String,String])
+
   def this(sc: JavaSparkContext, extraConfig: Map[String, String]) = this(sc.sc, extraConfig)
+
+  def this(sc: JavaSparkContext) = this(sc.sc, Map.empty[String,String])
 
   /**
    * Returns a new HBaseContext as new session, which will have separated SQLConf, UDF/UDAF,
@@ -89,6 +105,11 @@ class HBaseSQLContext private[hbase](@(transient@param) _hbaseSession: HBaseSess
   }
 
 
+  /**
+   * 用于从设置中读取hadoop集群安全认证数据
+   *
+   * @tparam T
+   */
   def applyCreds[T]() {
     //    credentials = SparkHadoopUtil.get.getCurrentUserCredentials()
     credentials = null
@@ -156,9 +177,9 @@ class HBaseSQLContext private[hbase](@(transient@param) _hbaseSession: HBaseSess
 
   private def getConf(configBroadcast: Broadcast[SerializableWritable[Configuration]]): Configuration = {
 
-    if (tmpHdfsConfiguration == null && tmpHdfsConfgFile != null) {
+    if (tmpHdfsConfiguration == null && tmpHdfsConfigFile != null) {
       val fs = FileSystem.newInstance(SparkHadoopUtil.get.conf)
-      val inputStream = fs.open(new Path(tmpHdfsConfgFile))
+      val inputStream = fs.open(new Path(tmpHdfsConfigFile))
       tmpHdfsConfiguration = new Configuration(false)
       tmpHdfsConfiguration.readFields(inputStream)
       inputStream.close()
@@ -237,6 +258,14 @@ object LatestHBaseContextCache {
   var latest: HBaseSQLContext = _
 }
 
+/**
+ *
+ * @param sc          spark context 实例
+ * @param config      hadoop相关设置
+ * @param extraConfig 用户自定义设置:
+ *                    {spark.hbase.client.impl -> HBaseClient接口具体实现类
+ *                    schema.file.url -> 默认HBaseClient实现中需要用到的hbase table schema文件路径}
+ */
 class HBaseSession(
                     @transient val sc: SparkContext,
                     @transient val config: Configuration,
@@ -244,7 +273,7 @@ class HBaseSession(
   self =>
   @transient
   override lazy val sessionState: SessionState = {
-    new HBaseSessionBuilder(this, None).build()
+    new HBaseSessionStateBuilder(this, None).build()
   }
 
   override def newSession(): HBaseSession = {

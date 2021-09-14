@@ -1,15 +1,12 @@
 package org.apache.spark.sql.hbase.client
 
-import java.io.{FileInputStream, ObjectInputStream, PrintStream}
-import java.net.URI
-import java.util.Properties
-import java.{util => ju}
-
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.hadoop.hbase.client._
+import org.apache.hadoop.hbase.io.ImmutableBytesWritable
 import org.apache.hadoop.hbase.io.compress.Compression
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding
+import org.apache.hadoop.hbase.mapreduce.TableInputFormat
 import org.apache.hadoop.hbase.regionserver.BloomType
 import org.apache.hadoop.hbase.security.User
 import org.apache.hadoop.hbase.util.Bytes
@@ -22,10 +19,14 @@ import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
 import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
+import org.apache.spark.sql.hbase.execution.HBaseFileFormat
 import org.apache.spark.sql.types.{StructField, StructType}
 import org.apache.spark.util.{CircularBuffer, SerializableConfiguration}
 import org.yaml.snakeyaml.Yaml
 
+import java.io.{FileInputStream, ObjectInputStream, PrintStream}
+import java.net.URI
+import java.{util => ju}
 import scala.annotation.meta.param
 import scala.collection.JavaConverters._
 
@@ -106,8 +107,12 @@ class HBaseClientImpl(
   /** Returns the configuration for the given key in the current session. */
   override def getConf(key: String, defaultValue: String): String = conf.get(key, defaultValue)
 
-  // Map[ table, Map[ family, Map[qua_name, type ] ]
+  /**
+   * 读取yml文件, 每次getTable时都会重新读取
+   * @return
+   */
   private def getSchemaProp = {
+    // Map[ table, Map[ family, Map[qua_name, type ] ]
     val yaml = new Yaml()
     val inputStream = new FileInputStream(schemaPath)
     val y = yaml.load[ju.Map[String, ju.Map[String, ju.Map[String, String]]]](inputStream)
@@ -122,6 +127,12 @@ class HBaseClientImpl(
     }.mkString(";\n") + "\n}"
   }
 
+  /**
+   * 获取各个qualifier对应的数据类型
+   * @param schemaMap
+   * @param tableName
+   * @return
+   */
   private def getSchema(schemaMap: ju.Map[String, ju.Map[String, ju.Map[String, String]]], tableName: String) = StructType {
     val rowKeyType = StructField("row_key", CatalystSqlParser.parseDataType(schemaMap.get(tableName).remove("row").get("key")))
     (Seq(rowKeyType) ++ schemaMap.get(tableName).asScala.flatMap { col =>
@@ -243,22 +254,33 @@ class HBaseClientImpl(
         val columns = cols.map(_.getNameAsString).mkString(",")
         val table = s"$tableName"
         val db = s"$dbName"
-        Map("db" -> db, "table" -> table, "qualifiers" -> qualifiers, "columns" -> columns, "encoding" -> encoding, "split" -> splitKeys, "bloom" -> bloom, "zip" -> zip)
+        Map("db" -> db,
+          "table" -> table,
+          "qualifiers" -> qualifiers,
+          "columns" -> columns,
+          "encoding" -> encoding,
+          "split" -> splitKeys,
+          "bloom" -> bloom,
+          "zip" -> zip)
       }
       val path = new Path(conf.get("hbase.rootdir") + s"/data/$dbName/$tableName")
       //TODO should add properties like {{cf:{Q1,Q2,...,Qn}}}, {splitKey:{S1,S2,...,Sn}}, {{DataEncoding:{prefix,diff,...}}}, {BloomType:{BloomType}}
       CatalogTable(
         identifier = TableIdentifier(tableName, Option(dbName)),
         //TODO tableType && table schema
-        tableType = CatalogTableType.MANAGED,
-        schema = schema,
+        tableType = CatalogTableType.EXTERNAL,
         storage = CatalogStorageFormat(
           locationUri = Option(path.toUri),
           // To avoid ClassNotFound exception, we try our best to not get the format class, but get
           // the class name directly. However, for non-native tables, there is no interface to get
           // the format class name, so we may still throw ClassNotFound in this case.
-          inputFormat = None,
-          outputFormat = None, serde = None, compressed = false, properties = Map.empty),
+          inputFormat = Some(classOf[TableInputFormat].getTypeName),
+          outputFormat = Some(classOf[(ImmutableBytesWritable,Result)].getTypeName),
+          serde = None,
+          compressed = false,
+          properties = Map.empty),
+        schema = schema,
+        provider = Some("hbase"),
         properties = props,
         stats = Some(CatalogStatistics(FileSystem.get(conf).getContentSummary(path).getLength)))
     }
@@ -278,6 +300,7 @@ class HBaseClientImpl(
     }
 
     val dbName = table.identifier.database.get
+    // dbName对应hbase的namespace
     if (!databaseExists(dbName)) {
       admin.createNamespace(NamespaceDescriptor.create(dbName).build())
     }

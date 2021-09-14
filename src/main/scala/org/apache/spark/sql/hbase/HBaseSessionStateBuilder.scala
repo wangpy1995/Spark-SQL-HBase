@@ -21,12 +21,12 @@ import org.apache.spark.sql.{SparkSession, Strategy}
  */
 @Experimental
 @Stable
-class HBaseSessionBuilder(session: SparkSession, parentState: Option[SessionState] = None)
+class HBaseSessionStateBuilder(
+                                session: SparkSession,
+                                parentState: Option[SessionState] = None)
   extends BaseSessionStateBuilder(session, parentState) {
 
-  def this(hbaseSession: HBaseSession) {
-    this(hbaseSession.asInstanceOf[SparkSession], None)
-  }
+  def this(hbaseSession: HBaseSession) = this(hbaseSession.asInstanceOf[SparkSession])
 
   override protected lazy val catalog: HBaseSessionCatalog = {
     val catalog = new HBaseSessionCatalog(
@@ -49,21 +49,23 @@ class HBaseSessionBuilder(session: SparkSession, parentState: Option[SessionStat
    * A logical query plan `Analyzer` with rules specific to Hive.
    */
   override protected def analyzer: Analyzer = new Analyzer(catalogManager) {
-    override val extendedResolutionRules: Seq[Rule[LogicalPlan]] =
-      new FindDataSourceTable(session) +:
+    override val extendedResolutionRules: Seq[Rule[LogicalPlan]] = {
+      new ResolveHBaseTable(session) +:
+        new FindDataSourceTable(session) +:
         new ResolveSQLOnFile(session) +:
         new FallBackFileSourceV2(session) +:
         ResolveEncodersInScalaAgg +:
         new ResolveSessionCatalog(catalogManager) +:
         ResolveWriteToStream +:
         customResolutionRules
+    }
 
     override val postHocResolutionRules: Seq[Rule[LogicalPlan]] =
       DetectAmbiguousSelfJoin +:
         PreprocessTableCreation(session) +:
         PreprocessTableInsertion +:
-        HBaseAnalysis +:
         DataSourceAnalysis +:
+        HBaseAnalysis +:
         customPostHocResolutionRules
 
     override val extendedCheckRules: Seq[LogicalPlan => Unit] =
@@ -104,5 +106,5 @@ class HBaseSessionBuilder(session: SparkSession, parentState: Option[SessionStat
     }
   }
 
-  override protected def newBuilder: NewBuilder = new HBaseSessionBuilder(_, _)
+  override protected def newBuilder: NewBuilder = new HBaseSessionStateBuilder(_, _)
 }
