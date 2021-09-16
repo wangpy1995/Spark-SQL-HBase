@@ -4,11 +4,12 @@ import org.apache.hadoop.hbase.{NamespaceDescriptor, TableName}
 import org.apache.hadoop.hbase.client.{ColumnFamilyDescriptorBuilder, Put, Scan, TableDescriptorBuilder}
 import org.apache.hadoop.hbase.util.Bytes
 import org.apache.spark.sql.hbase.TConstants
+import org.scalatest.funsuite.AnyFunSuite
 
 /**
  * Created by wpy on 17-5-18.
  */
-object TestHBase {
+class TestHBase extends AnyFunSuite {
   private val admin = TConstants.admin
   private val conn = TConstants.conn
 
@@ -38,7 +39,7 @@ object TestHBase {
     }
   }
 
-  def insertData() = {
+  def insertData(): Unit = {
     for (i <- 0 until 1000) {
       val rowKey = i.formatted("%04d").toString
       val put = new Put(Bytes.toBytes(rowKey))
@@ -68,10 +69,27 @@ object TestHBase {
   }
 
 
-  def main(args: Array[String]): Unit = {
-    //    createUserNamespaceAndTable()
-    //    insertData()
-    //    scan()
+  test("create namespace and table") {
+    createUserNamespaceAndTable()
   }
 
+  test("insert some data") {
+    insertData()
+  }
+
+  test("scan") {
+    scan()
+  }
+
+
+}
+
+object TestHBase {
+  val testHBase = new TestHBase()
+
+  def main(args: Array[String]): Unit = {
+    testHBase.createUserNamespaceAndTable()
+    testHBase.insertData()
+    testHBase.scan()
+  }
 }

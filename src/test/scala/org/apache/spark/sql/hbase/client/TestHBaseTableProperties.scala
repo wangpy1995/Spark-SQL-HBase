@@ -1,18 +1,19 @@
 package org.apache.spark.sql.hbase.client
 
 import org.apache.spark.sql.hbase.TConstants._
+import org.scalatest.funsuite.AnyFunSuite
 
 /**
-  * Created by wpy on 17-5-13.
-  */
-object TestHBaseTableProperties {
+ * Created by wpy on 17-5-13.
+ */
+class TestHBaseTableProperties extends AnyFunSuite {
   def testPropertiesAsString(dbName: String, tableName: String): String = {
-    val cli = IsolatedClientLoader.forVersion("2.0", "2.7.1", sparkConf, conf).createClient()
+    val cli = IsolatedClientLoader.forVersion("3.0.0", "3.2.0", sparkConf, conf, extraConfig).createClient()
     cli.getTableOption(dbName, tableName).get.properties.mkString("\n")
   }
 
-  def testExecutor() {
-    val pattern = "\\{([0-9a-zA-Z]*):\\((([0-9a-zA-Z]*([,])?)*)\\)\\}".r
+  def testExecutor(): Unit = {
+    val pattern = "\\{([0-9a-zA-Z]*):\\((([0-9a-zA-Z]*([,])?)*)\\)}".r
     val str = "{CF1:(Q1, Q2, Q3, Qn)}".replaceAll("\t", " ").replaceAll(" ", "")
     /* val p = pattern.pattern matcher str
      var x = List.empty[String]
@@ -36,9 +37,11 @@ object TestHBaseTableProperties {
     println(r)
   }
 
+  test("print table properties") {
+    println(testPropertiesAsString(TEST_NAMESPACE, TEST_TABLE_NAME))
+  }
 
-  def main(args: Array[String]): Unit = {
-    //    println(testPropertiesAsString("wpy", "test"))
+  test("reduce string") {
     testReduce()
   }
 }

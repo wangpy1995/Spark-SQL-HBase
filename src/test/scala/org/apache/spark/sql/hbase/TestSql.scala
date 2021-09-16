@@ -1,31 +1,29 @@
 package org.apache.spark.sql.hbase
 
-import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.hbase.{CompareOperator, TableName}
 import org.apache.hadoop.hbase.client.{Result, Scan}
 import org.apache.hadoop.hbase.filter.{FilterList, SingleColumnValueFilter, SubstringComparator}
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable
 import org.apache.hadoop.hbase.mapreduce.{IdentityTableMapper, TableInputFormat, TableMapReduceUtil}
 import org.apache.hadoop.hbase.util.Bytes
+import org.apache.hadoop.hbase.{CompareOperator, TableName}
 import org.apache.hadoop.mapred.JobConf
 import org.apache.hadoop.mapreduce.Job
 import org.apache.spark.deploy.SparkHadoopUtil
+import org.apache.spark.sql.hbase.TConstants._
+import org.scalatest.funsuite.AnyFunSuite
 
 /**
  * Created by wpy on 17-5-17.
  */
-object TestSql {
-
-  def testSql(): Unit = {
-  }
+class TestSql extends AnyFunSuite {
 
   /**
    * 通过查询HBase数据来测试spark newAPIHadoopRDD是否正常
    *
    * @param hc
    */
-  def testNewHBaseRDD(hc: HBaseSession) = {
-    val job: Job = Job.getInstance(hc.config)
+  test("new newAPIHadoopRDD") {
+    val job: Job = Job.getInstance(hs.config)
     val scan = new Scan()
     scan.addColumn(Bytes.toBytes("cf2"), Bytes.toBytes("cf2_0"))
     scan.addColumn(Bytes.toBytes("cf1"), Bytes.toBytes("cf1_0"))
@@ -39,7 +37,7 @@ object TestSql {
 
     val jconf = new JobConf()
     SparkHadoopUtil.get.addCredentials(jconf)
-    val rdd = hc.sparkContext.newAPIHadoopRDD(job.getConfiguration, classOf[TableInputFormat], classOf[ImmutableBytesWritable], classOf[Result])
+    val rdd = hs.sparkContext.newAPIHadoopRDD(job.getConfiguration, classOf[TableInputFormat], classOf[ImmutableBytesWritable], classOf[Result])
     val count = rdd.map { a =>
       println(a)
       a
@@ -47,21 +45,8 @@ object TestSql {
     println(count)
   }
 
-  def main(args: Array[String]): Unit = {
-    val hc = new HBaseSession(
-      TConstants.sc,
-      new Configuration(),
-      Map(
-        "schema.file.url" -> "/home/wpy/IdeaProjects/Spark-SQL-HBase/src/main/resources/test.yml",
-        "spark.hbase.client.impl" -> "org.apache.spark.sql.hbase.client.HBaseClientImpl"))
-
-    testNewHBaseRDD(hc)
-//    val query = hc.sql("select * from hbase.meta")
-//    query.show()
-    while (true) {
-      Thread.sleep(10000)
-    }
-    //   "123,45,6".split(",").filter(_.matches(".*")).foreach(println)
-
+  test("select * ") {
+    hs.sql("select * from hbase.meta").show()
+    hs.sql(s"select * from $TEST_NAMESPACE.$TEST_TABLE_NAME")
   }
 }
