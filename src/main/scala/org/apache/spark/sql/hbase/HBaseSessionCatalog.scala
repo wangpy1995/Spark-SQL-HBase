@@ -21,7 +21,8 @@ private[sql] class HBaseSessionCatalog(
                                         tableFunctionRegistry: TableFunctionRegistry,
                                         hadoopConf: Configuration,
                                         parser: ParserInterface,
-                                        functionResourceLoader: FunctionResourceLoader)
+                                        functionResourceLoader: FunctionResourceLoader,
+                                        functionExpressionBuilder: FunctionExpressionBuilder)
   extends SessionCatalog(
     externalCatalogBuilder,
     globalTempViewManagerBuilder,
@@ -29,7 +30,8 @@ private[sql] class HBaseSessionCatalog(
     tableFunctionRegistry,
     hadoopConf,
     parser,
-    functionResourceLoader) {
+    functionResourceLoader,
+    functionExpressionBuilder) {
 
 
   override def refreshTable(name: TableIdentifier): Unit = {
@@ -43,8 +45,8 @@ private[sql] class HBaseSessionCatalog(
    */
   override def lookupRelation(name: TableIdentifier): LogicalPlan = {
     synchronized {
-      val db = formatDatabaseName(name.database.getOrElse(currentDb))
-      val table = formatTableName(name.table)
+      val db = format(name.database.getOrElse(currentDb))
+      val table = format(name.table)
       if (db == globalTempViewManager.database) {
         globalTempViewManager.get(table).map { viewDef =>
           SubqueryAlias(table, viewDef)

@@ -9,7 +9,7 @@ import org.scalatest.funsuite.AnyFunSuite
 
 class HBaseFileFormatTestSuite extends AnyFunSuite {
   val hadoopConf = new Configuration()
-  val hfilePath = "/home/wpy/tmp/hbase/data/wpy1/test/475684a4f75db4114dbb4b0ff1ac6a01/cf2/7344cc44459e47bfbc1ce6b68a9c8bd8"
+  val hfilePath = "/home/pw/tmp/hbase/data/wpy1/test/475684a4f75db4114dbb4b0ff1ac6a01/cf2/7344cc44459e47bfbc1ce6b68a9c8bd8"
 
   test("read hfile") {
     var lastKey: String = null
@@ -17,7 +17,7 @@ class HBaseFileFormatTestSuite extends AnyFunSuite {
     val fs = FileSystem.get(hadoopConf)
     val hfileReader = HFile.createReader(fs, filePath, hadoopConf)
 
-    val scanner = hfileReader.getScanner(false, false)
+    val scanner = hfileReader.getScanner(hConf,false, false)
     scanner.seekTo()
     while (scanner.next()) {
       val cell = scanner.getCell

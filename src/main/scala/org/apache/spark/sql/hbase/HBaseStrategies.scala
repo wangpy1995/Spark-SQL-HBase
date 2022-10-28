@@ -12,6 +12,7 @@ import org.apache.spark.sql.catalyst.{CatalystTypeConverters, InternalRow, Quali
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.command.{CreateTableCommand, ExecutedCommandExec}
 import org.apache.spark.sql.execution.datasources.DataSourceStrategy.selectFilters
+import org.apache.spark.sql.execution.datasources.v2.PushedDownOperators
 import org.apache.spark.sql.execution.datasources.{CreateTable, DataSource, DataSourceUtils, InsertIntoDataSourceCommand, InsertIntoHadoopFsRelationCommand, LogicalRelation}
 import org.apache.spark.sql.hbase.catalog.HBaseTableRelation
 import org.apache.spark.sql.hbase.execution.{CreateHBaseTableAsSelectCommand, HBaseFileFormat, HBaseTableScanExec, InsertIntoHBaseTable}
@@ -161,7 +162,7 @@ private[hbase] trait HBaseStrategies {
           StructType.fromAttributes(projects.map(_.toAttribute)),
           pushedFilters.toSet,
           pushedFilters.toSet,
-          None,
+          PushedDownOperators(None, None, None, None, Seq.empty, Seq.empty),
           scanBuilder(requestedColumns, candidatePredicates, pushedFilters),
           relation.relation,
           relation.catalogTable.map(_.identifier))
@@ -176,7 +177,7 @@ private[hbase] trait HBaseStrategies {
           StructType.fromAttributes(requestedColumns),
           pushedFilters.toSet,
           pushedFilters.toSet,
-          None,
+          PushedDownOperators(None, None, None, None, Seq.empty, Seq.empty),
           scanBuilder(requestedColumns, candidatePredicates, pushedFilters),
           relation.relation,
           relation.catalogTable.map(_.identifier))

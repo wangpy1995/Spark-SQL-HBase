@@ -40,7 +40,7 @@ case class HBaseTableRelation(
     tableMeta.stats.map(_.toPlanStats(output, conf.cboEnabled || conf.planStatsEnabled))
       .orElse(tableStats)
       .getOrElse {
-        throw QueryExecutionErrors.tableStatsNotSpecifiedError
+        throw new IllegalStateException("Table stats must be specified.")
       }
   }
 

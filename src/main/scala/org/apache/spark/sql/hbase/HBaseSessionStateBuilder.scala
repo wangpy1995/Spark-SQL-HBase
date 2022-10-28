@@ -13,7 +13,7 @@ import org.apache.spark.sql.execution.command.CommandCheck
 import org.apache.spark.sql.execution.datasources._
 import org.apache.spark.sql.execution.datasources.v2.{DataSourceV2Strategy, TableCapabilityCheck}
 import org.apache.spark.sql.execution.streaming.ResolveWriteToStream
-import org.apache.spark.sql.internal.{BaseSessionStateBuilder, SessionState}
+import org.apache.spark.sql.internal.{BaseSessionStateBuilder, SessionState, SparkUDFExpressionBuilder}
 import org.apache.spark.sql.{SparkSession, Strategy}
 
 /**
@@ -36,7 +36,8 @@ class HBaseSessionStateBuilder(
       tableFunctionRegistry,
       SessionState.newHadoopConf(session.sparkContext.hadoopConfiguration, conf),
       sqlParser,
-      resourceLoader)
+      resourceLoader,
+      new SparkUDFExpressionBuilder)
     parentState.foreach(_.catalog.copyStateTo(catalog))
     catalog
   }
@@ -64,7 +65,7 @@ class HBaseSessionStateBuilder(
       DetectAmbiguousSelfJoin +:
         PreprocessTableCreation(session) +:
         PreprocessTableInsertion +:
-        DataSourceAnalysis +:
+        DataSourceAnalysis(this) +:
         HBaseAnalysis +:
         customPostHocResolutionRules
 
@@ -100,7 +101,6 @@ class HBaseSessionStateBuilder(
             JoinSelection ::
             InMemoryScans ::
             SparkScripts ::
-            WithCTEStrategy ::
             BasicOperators :: Nil)
       }
     }

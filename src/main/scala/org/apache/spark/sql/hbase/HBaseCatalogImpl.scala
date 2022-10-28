@@ -2,7 +2,7 @@ package org.apache.spark.sql.hbase
 
 import org.apache.spark.annotation.Experimental
 import org.apache.spark.sql._
-import org.apache.spark.sql.catalog.{Catalog, Column, Database, Function, Table}
+import org.apache.spark.sql.catalog.{Catalog, CatalogMetadata, Column, Database, Function, Table}
 import org.apache.spark.sql.catalyst.analysis.UnresolvedTable
 import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
@@ -62,7 +62,7 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog with Supports
    */
   override def listDatabases(): Dataset[Database] = {
     val databases = sessionCatalog.listDatabases().map(makeDatabase)
-    CatalogImpl.makeDataset(databases, hbaseSession)
+    HBaseCatalogImpl.makeDataset(databases, hbaseSession)
   }
 
   private def makeDatabase(dbName: String): Database = {
@@ -88,7 +88,7 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog with Supports
   @throws[AnalysisException]("database does not exist")
   override def listTables(dbName: String): Dataset[Table] = {
     val tables = sessionCatalog.listTables(dbName).map(makeTable)
-    CatalogImpl.makeDataset(tables, hbaseSession)
+    HBaseCatalogImpl.makeDataset(tables, hbaseSession)
   }
 
   /**
@@ -133,7 +133,7 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog with Supports
     val functions = sessionCatalog.listFunctions(dbName).map { case (functIdent, _) =>
       makeFunction(functIdent)
     }
-    CatalogImpl.makeDataset(functions, hbaseSession)
+    HBaseCatalogImpl.makeDataset(functions, hbaseSession)
   }
 
   private def makeFunction(funcIdent: FunctionIdentifier): Function = {
@@ -178,7 +178,7 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog with Supports
         isPartition = partitionColumnNames.contains(c.name),
         isBucket = bucketColumnNames.contains(c.name))
     }
-    CatalogImpl.makeDataset(columns, hbaseSession)
+    HBaseCatalogImpl.makeDataset(columns, hbaseSession)
   }
 
   /**
@@ -328,8 +328,8 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog with Supports
                             source: String,
                             schema: StructType,
                             options: Map[String, String]): DataFrame = {
-    createTable(tableName= tableName,
-      source= source,
+    createTable(tableName = tableName,
+      source = source,
       schema = schema,
       description = "",
       options = options)
@@ -573,7 +573,7 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog with Supports
       throw QueryExecutionErrors.invalidNamespaceNameError(namespace)
   }
 
-  override def dropNamespace(namespace: Array[String]): Boolean = namespace match {
+  override def dropNamespace(namespace: Array[String], cascade: Boolean): Boolean = namespace match {
     case Array(db) if sessionCatalog.databaseExists(db) =>
       sessionCatalog.dropDatabase(db, ignoreIfNotExists = true, cascade = true)
       true
@@ -589,10 +589,27 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog with Supports
   }
 
   override def name(): String = "hbase_catalog"
+
+  override def currentCatalog(): String =
+    hbaseSession.sessionState.catalogManager.currentCatalog.name()
+
+  override def setCurrentCatalog(catalogName: String): Unit =
+    hbaseSession.sessionState.catalogManager.setCurrentCatalog(catalogName)
+
+  override def listCatalogs(): Dataset[CatalogMetadata] = {
+    val catalogs = hbaseSession.sessionState.catalogManager.listCatalogs(None)
+    HBaseCatalogImpl.makeDataset(catalogs.map(name => makeCatalog(name)), hbaseSession)
+  }
+
+  private def makeCatalog(name: String): CatalogMetadata = {
+    new CatalogMetadata(
+      name = name,
+      description = null)
+  }
 }
 
 
-private[sql] object CatalogImpl {
+private[sql] object HBaseCatalogImpl {
 
   def makeDataset[T <: DefinedByConstructorParams : TypeTag](
                                                               data: Seq[T],

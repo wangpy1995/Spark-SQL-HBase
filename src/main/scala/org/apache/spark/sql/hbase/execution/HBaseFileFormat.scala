@@ -93,7 +93,7 @@ class HBaseFileFormat
         var seeked = false
         val fs = FileSystem.get(broadcastedHadoopConf.value.value)
         val hFileReader = HFile.createReader(fs, new Path(hfile.filePath), broadcastedHadoopConf.value.value)
-        val scanner = hFileReader.getScanner(false, false)
+        val scanner = hFileReader.getScanner(hadoopConf,false, false)
         var hashNextValue: Boolean = false
 
         override def hasNext: Boolean = {
