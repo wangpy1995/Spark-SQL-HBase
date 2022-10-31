@@ -41,7 +41,7 @@
   -->
   <property>
     <name>hbase.rootdir</name>
-    <value>file:///home/wpy/tmp/hbase</value>
+    <value>file:///home/pw/IdeaProjects/hbase</value>
   </property>
   <property>
     <name>hbase.cluster.distributed</name>
@@ -49,7 +49,7 @@
   </property>
   <property>
     <name>hbase.tmp.dir</name>
-    <value>file:///home/pw/tmp/hbase/tmp</value>
+    <value>file:///home/pw/IdeaProjects/hbase/tmp</value>
   </property>
   <property>
     <name>hbase.unsafe.stream.capability.enforce</name>
