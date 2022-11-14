@@ -2,12 +2,13 @@ package org.apache.spark.sql.hbase.execution
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileStatus, FileSystem, Path}
-import org.apache.hadoop.hbase.CellBuilderType
+import org.apache.hadoop.hbase.{Cell, CellBuilderType}
 import org.apache.hadoop.hbase.client.Put
-import org.apache.hadoop.hbase.io.hfile.HFile
+import org.apache.hadoop.hbase.io.ImmutableBytesWritable
+import org.apache.hadoop.hbase.io.hfile.{HFile, HFileScanner}
 import org.apache.hadoop.hbase.mapreduce.HFileOutputFormat2
 import org.apache.hadoop.hbase.util.Bytes
-import org.apache.hadoop.mapreduce.{Job, TaskAttemptContext}
+import org.apache.hadoop.mapreduce.{Job, RecordWriter, TaskAttemptContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.InternalRow
@@ -53,13 +54,13 @@ class HBaseFileFormat
   /**
    * read HFile
    *
-   * @param sparkSession
+   * @param sparkSession spark session
    * @param dataSchema      data: HBase Qualifier
    * @param partitionSchema partition is not supported in HBase ,so empty partition here
    * @param requiredSchema  required HBase Qualifier
-   * @param filters
-   * @param options
-   * @param hadoopConf
+   * @param filters Hbase filter
+   * @param options not use
+   * @param hadoopConf hadoop configuration
    * @return
    */
   override def buildReader(
@@ -86,14 +87,18 @@ class HBaseFileFormat
       val idx = requiredSchema.getFieldIndex(field.name).get
       requiredQualifierNameMap.put(qualifier, (converter, idx))
     }
-    val broadcastedHadoopConf =
+    val broadcastedHadoopConf = {
       sparkSession.sparkContext.broadcast(new SerializableConfiguration(hadoopConf))
+    }
+        //return serializable function
     hfile => {
       new Iterator[InternalRow] {
+        //all fields must be serialized
         var seeked = false
-        val fs = FileSystem.get(broadcastedHadoopConf.value.value)
-        val hFileReader = HFile.createReader(fs, new Path(hfile.filePath), broadcastedHadoopConf.value.value)
-        val scanner = hFileReader.getScanner(hadoopConf,false, false)
+        val broadcastConfValue: Configuration = broadcastedHadoopConf.value.value
+        val fs: FileSystem = FileSystem.get(broadcastConfValue)
+        val hFileReader: HFile.Reader = HFile.createReader(fs, new Path(hfile.filePath), broadcastedHadoopConf.value.value)
+        val scanner: HFileScanner = hFileReader.getScanner(broadcastConfValue,false, false)
         var hashNextValue: Boolean = false
 
         override def hasNext: Boolean = {
@@ -187,12 +192,12 @@ class HBaseFileFormat
 }
 
 class HBaseOutputWriter(context: TaskAttemptContext, dataSchema: StructType) extends OutputWriter {
-  val hFileWriter = new HFileOutputFormat2().getRecordWriter(context)
+  val hFileWriter: RecordWriter[ImmutableBytesWritable, Cell] = new HFileOutputFormat2().getRecordWriter(context)
 
-  val rowKeyIdx = dataSchema.getFieldIndex("rowKey").get
-  val rowKeyConverter = HBaseSparkDataUtils.genInternalRowToHBaseConverter(dataSchema(rowKeyIdx).dataType)
+  val rowKeyIdx: Int = dataSchema.getFieldIndex("rowKey").get
+  val rowKeyConverter: (InternalRow, Int) => Array[Byte] = HBaseSparkDataUtils.genInternalRowToHBaseConverter(dataSchema(rowKeyIdx).dataType)
 
-  val schemaMap = dataSchema.map { field =>
+  val schemaMap: Map[String, (Array[Byte], Array[Byte], Option[Int], (InternalRow, Int) => Array[Byte])] = dataSchema.map { field =>
     val familyQualifierName = field.name.split("_", 2)
     val familyName = Bytes.toBytes(familyQualifierName.head)
     val qualifierName = Bytes.toBytes(familyQualifierName.last)

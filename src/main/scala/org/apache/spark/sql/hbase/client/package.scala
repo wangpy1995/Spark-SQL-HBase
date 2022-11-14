@@ -40,13 +40,13 @@ package object client {
         "org.glassfish.jersey.bundles.repackaged:jersey-guava",
         "org.glassfish.hk2.external:javax.inject"))
 
-    case object v3_0 extends HBaseVersion("3.0.0-alpha-2-SNAPSHOT",
+    case object v3_0 extends HBaseVersion("3.0.0-alpha-4-SNAPSHOT",
       exclusions = Seq("jdk.tools:jdk.tools",
         "org.glassfish.hk2:*",
         "org.glassfish.jersey.bundles.repackaged:jersey-guava",
         "org.glassfish.hk2.external:javax.inject"))
 
-    val allSupportedHBaseVersions = Set(v1_0, v1_1, v1_2, v2_0, v3_0)
+    val allSupportedHBaseVersions: Set[HBaseVersion] = Set(v1_0, v1_1, v1_2, v2_0, v3_0)
   }
 
 }

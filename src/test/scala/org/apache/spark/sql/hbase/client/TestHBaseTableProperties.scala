@@ -8,7 +8,7 @@ import org.scalatest.funsuite.AnyFunSuite
  */
 class TestHBaseTableProperties extends AnyFunSuite {
   def testPropertiesAsString(dbName: String, tableName: String): String = {
-    val cli = IsolatedClientLoader.forVersion("3.0.0", "3.2.0", sparkConf, conf, extraConfig).createClient()
+    val cli = IsolatedClientLoader.forVersion("3.0.0", "3.2.4", sparkConf, conf, extraConfig).createClient()
     cli.getTableOption(dbName, tableName).get.properties.mkString("\n")
   }
 

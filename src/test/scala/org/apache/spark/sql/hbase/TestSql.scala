@@ -20,19 +20,23 @@ class TestSql extends AnyFunSuite {
   /**
    * 通过查询HBase数据来测试spark newAPIHadoopRDD是否正常
    *
-   * @param hc
    */
   test("new newAPIHadoopRDD") {
     val job: Job = Job.getInstance(hs.config)
     val scan = new Scan()
-    scan.addColumn(Bytes.toBytes("cf2"), Bytes.toBytes("cf2_0"))
-    scan.addColumn(Bytes.toBytes("cf1"), Bytes.toBytes("cf1_0"))
-    val filter = new SingleColumnValueFilter(Bytes.toBytes("cf1"), Bytes.toBytes("cf1_0"), CompareOperator.EQUAL, new SubstringComparator("24"))
+    val table = TableName.valueOf(TEST_NAMESPACE + ":" + TEST_TABLE_NAME)
+    val bytesColA = Bytes.toBytes(TEST_COL_A)
+    val bytesColB = Bytes.toBytes(TEST_COL_B)
+    val bytesAQua0 = Bytes.toBytes(TEST_COL_A + "_00")
+    val bytesBQua0 = Bytes.toBytes(TEST_COL_B + "_00")
+    scan.addColumn(bytesColA, bytesAQua0)
+    scan.addColumn(bytesColB, bytesBQua0)
+    val filter = new SingleColumnValueFilter(bytesColA, bytesAQua0, CompareOperator.EQUAL, new SubstringComparator("04"))
     filter.setFilterIfMissing(true)
     scan.setFilter(new FilterList(filter))
 
     TableMapReduceUtil.initCredentials(job)
-    TableMapReduceUtil.initTableMapperJob(TableName.valueOf("wpy1:test"), scan,
+    TableMapReduceUtil.initTableMapperJob(table, scan,
       classOf[IdentityTableMapper], null, null, job)
 
     val jconf = new JobConf()
@@ -47,6 +51,6 @@ class TestSql extends AnyFunSuite {
 
   test("select * ") {
     hs.sql("select * from hbase.meta").show()
-    hs.sql(s"select * from $TEST_NAMESPACE.$TEST_TABLE_NAME")
+    hs.sql(s"select * from $TEST_NAMESPACE.$TEST_TABLE_NAME").show()
   }
 }

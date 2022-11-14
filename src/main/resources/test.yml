@@ -1,28 +1,28 @@
-wpy1:test:
+pw:test:
   row:
     key: string
-  cf1:
-    cf1_0: string
-    cf1_1: string
-    cf1_2: string
-    cf1_3: string
-    cf1_4: string
-    cf1_5: string
-    cf1_6: string
-    cf1_7: string
-    cf1_8: string
-    cf1_9: string
-  cf2:
-    cf2_0: string
-    cf2_1: string
-    cf2_2: string
-    cf2_3: string
-    cf2_4: string
-    cf2_5: string
-    cf2_6: string
-    cf2_7: string
-    cf2_8: string
-    cf2_9: string
+  A:
+    A_00: string
+    A_01: string
+    A_02: string
+    A_03: string
+    A_04: string
+    A_05: string
+    A_06: string
+    A_07: string
+    A_08: string
+    A_09: string
+  B:
+    B_00: string
+    B_01: string
+    B_02: string
+    B_03: string
+    B_04: string
+    B_05: string
+    B_06: string
+    B_07: string
+    B_08: string
+    B_09: string
 
 hbase:meta:
   row:

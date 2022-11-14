@@ -9,7 +9,7 @@ import org.apache.spark.sql.SparkSession
 /**
  * Created by wpy on 17-5-13.
  */
-private[hbase] object TConstants {
+private[hbase] object TConstants extends Serializable {
   private[hbase] lazy val conf = new Configuration()
   private[hbase] lazy val hConf = HBaseConfiguration.create(conf)
   private[hbase] lazy val conn = ConnectionFactory.createConnection(hConf)

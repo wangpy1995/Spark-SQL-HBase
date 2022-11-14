@@ -10,8 +10,9 @@ import org.apache.hadoop.hbase.HConstants
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.deploy.SparkSubmitUtils
 import org.apache.spark.internal.Logging
-import org.apache.spark.sql.internal.NonClosableMutableURLClassLoader
-import org.apache.spark.util.{MutableURLClassLoader, Utils}
+import org.apache.spark.sql.catalyst.util.quietly
+import org.apache.spark.sql.internal.{NonClosableMutableURLClassLoader, SQLConf}
+import org.apache.spark.util.{MutableURLClassLoader, Utils, VersionUtils}
 
 /**
  * Created by wpy on 2017/5/12.
@@ -36,21 +37,26 @@ private[hbase] object IsolatedClientLoader extends Logging {
     val files = if (resolvedVersions.contains((resolvedVersion, hadoopVersion))) {
       resolvedVersions((resolvedVersion, hadoopVersion))
     } else {
+      val remoteRepos = sparkConf.get(SQLConf.ADDITIONAL_REMOTE_REPOSITORIES)
       log.info("downloading jars from maven")
       val (downloadedFiles, actualHadoopVersion) =
         try {
-          (downloadVersion(resolvedVersion, hadoopVersion, ivyPath), hadoopVersion)
+          (downloadVersion(resolvedVersion, hadoopVersion, ivyPath, remoteRepos), hadoopVersion)
         } catch {
           case e: RuntimeException if e.getMessage.contains("hadoop") =>
             // If the error message contains hadoop, it is probably because the hadoop
             // version cannot be resolved.
-            logWarning(s"Failed to resolve Hadoop artifacts for the version $hadoopVersion. " +
-              s"We will change the hadoop version from $hadoopVersion to 2.6.0 and try again. " +
-              "Hadoop classes will not be shared between Spark and HBase metastore client. " +
-              "It is recommended to set jars used by HBase metastore client through " +
-              "spark.sql.HBase.metastore.jars in the production environment.")
-            sharesHadoopClasses = false
-            (downloadVersion(resolvedVersion, "2.6.5", ivyPath), "2.6.5")
+            val fallbackVersion = if (VersionUtils.isHadoop3) {
+              "3.3.4"
+            } else {
+              "2.7.4"
+            }
+            logWarning(s"Failed to resolve Hadoop artifacts for the version $hadoopVersion. We " +
+              s"will change the hadoop version from $hadoopVersion to $fallbackVersion and try " +
+              "again. It is recommended to set jars used by Hive metastore client through " +
+              "spark.sql.hive.metastore.jars in the production environment.")
+            (downloadVersion(
+              resolvedVersion, fallbackVersion, ivyPath, remoteRepos), fallbackVersion)
         }
       resolvedVersions.put((resolvedVersion, actualHadoopVersion), downloadedFiles)
       resolvedVersions((resolvedVersion, actualHadoopVersion))
@@ -75,26 +81,40 @@ private[hbase] object IsolatedClientLoader extends Logging {
     case "3.0.0-SNAPSHOT" | "3.0.0-alpha-1-SNAPSHOT" | "3.0.0-alpha-2-SNAPSHOT" | "3.0" | "3.0.0" => hbase.v3_0
   }
 
+  def supportsHadoopShadedClient(hadoopVersion: String): Boolean = {
+    VersionUtils.majorMinorPatchVersion(hadoopVersion).exists {
+      case (3, 2, v) if v >= 2 => true
+      case (3, 3, v) if v >= 1 => true
+      case _ => false
+    }
+  }
+
   private def downloadVersion(
                                version: HBaseVersion,
                                hadoopVersion: String,
-                               ivyPath: Option[String]): Seq[URL] = {
+                               ivyPath: Option[String],
+                               remoteRepos: String): Seq[URL] = {
+    val hadoopJarNames = if (supportsHadoopShadedClient(hadoopVersion)) {
+      Seq(s"org.apache.hadoop:hadoop-client-api:$hadoopVersion",
+        s"org.apache.hadoop:hadoop-client-runtime:$hadoopVersion")
+    } else {
+      Seq(s"org.apache.hadoop:hadoop-client:$hadoopVersion")
+    }
     val hbaseArtifacts = version.extraDeps ++
       Seq("hbase-client", "hbase-common", "hbase-server",
         "hbase-hadoop-compat",
         "hbase-metrics", "hbase-metrics-api")
         .map(a => s"org.apache.hbase:$a:${version.fullVersion}") ++
-      Seq("com.google.guava:guava:14.0.1",
-        s"org.apache.hadoop:hadoop-client:$hadoopVersion")
+      Seq("com.google.guava:guava:14.0.1") ++ hadoopJarNames
 
-    val classpath = /*quietly*/ {
+    val classpath = quietly {
       SparkSubmitUtils.resolveMavenCoordinates(
         hbaseArtifacts.mkString(","),
         SparkSubmitUtils.buildIvySettings(
-          Some("http://www.datanucleus.org/downloads/maven2"),
+          Some(remoteRepos),
           ivyPath),
-        exclusions = version.exclusions,
-        transitive = true)
+        transitive = true,
+        exclusions = version.exclusions)
     }
     val allFiles = classpath.map(new File(_)).toSet
 

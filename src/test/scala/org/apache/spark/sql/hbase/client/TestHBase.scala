@@ -53,7 +53,7 @@ class TestHBase extends AnyFunSuite with Logging {
     val splitterBytes = Bytes.toBytes(splitChar)
     val tableConn = conn.getTable(TableName.valueOf(tableName))
 
-    def insertData(put: Put, bytesRowKey: Array[Byte], bytesColumnName: Array[Byte],
+    def insertIntoPut(put: Put, bytesRowKey: Array[Byte], bytesColumnName: Array[Byte],
                    formattedQualifier: String, splitterBytes: Array[Byte]) = {
       //pattern: col+${splitter}+qualifier, A_01
       val qualifierBytes = Bytes.add(bytesColumnName, splitterBytes, Bytes.toBytes(formattedQualifier))
@@ -64,15 +64,15 @@ class TestHBase extends AnyFunSuite with Logging {
     }
 
     for (i <- 0 until TConstants.MAX_ROW_CNT) {
-      val rowKey = i.toString.format(rowPattern)
+      val rowKey = rowPattern.format(i)
       val bytesRowKey = Bytes.toBytes(rowKey)
       val put = new Put(Bytes.toBytes(rowKey))
 
       for (j <- 0 until TConstants.MAX_QUALIFIER_CNT) {
-        val formattedQualifier = j.toString.format(qualifierPattern)
+        val formattedQualifier = qualifierPattern.format(j)
         //col value pattern: qualifier_rowKey
         bytesColumnNames.foreach { bytesColumnName =>
-          insertData(put, bytesRowKey, bytesColumnName, formattedQualifier, splitterBytes)
+          insertIntoPut(put, bytesRowKey, bytesColumnName, formattedQualifier, splitterBytes)
         }
         tableConn.put(put)
       }

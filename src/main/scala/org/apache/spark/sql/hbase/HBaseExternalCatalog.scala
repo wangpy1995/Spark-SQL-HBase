@@ -5,7 +5,7 @@ import org.apache.spark.SparkConf
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.expressions.Expression
-import org.apache.spark.sql.hbase.client.{HBaseClient, IsolatedClientLoader}
+import org.apache.spark.sql.hbase.client.{HBaseClient, HBaseClientImpl, IsolatedClientLoader}
 import org.apache.spark.sql.types.StructType
 
 /**
@@ -20,8 +20,8 @@ class HBaseExternalCatalog(
 
   import CatalogTypes.TablePartitionSpec
 
-  val client: HBaseClient = IsolatedClientLoader.forVersion("3.0.0", "3.2.0", conf, hadoopConf, extraConfig).createClient()
-  //  val client = new HBaseClientImpl(conf, hadoopConf)
+    val client: HBaseClient = IsolatedClientLoader.forVersion("3.0.0", "3.2.4", conf, hadoopConf, extraConfig).createClient()
+//  val client = new HBaseClientImpl(IsolatedClientLoader.hbaseVersion("3.0.0"), conf, hadoopConf, Map.empty, this.getClass.getClassLoader, null)
 
   override def createDatabase(dbDefinition: CatalogDatabase, ignoreIfExists: Boolean): Unit = {
     client.createDatabase(dbDefinition, ignoreIfExists)

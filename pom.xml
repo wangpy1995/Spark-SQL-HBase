@@ -65,6 +65,20 @@
             <version>1.33</version>
         </dependency>
 
+        <!-- https://www.pangugle.com/lib/maven/view/net.minidev/accessors-smart.html -->
+        <dependency>
+            <groupId>net.minidev</groupId>
+            <artifactId>accessors-smart</artifactId>
+            <version>2.4.7</version>
+        </dependency>
+
+        <!-- https://www.pangugle.com/lib/maven/view/net.minidev/json-smart.html -->
+        <dependency>
+            <groupId>net.minidev</groupId>
+            <artifactId>json-smart</artifactId>
+            <version>2.4.7</version>
+        </dependency>
+
         <dependency>
             <groupId>org.scalatest</groupId>
             <artifactId>scalatest_${scala.binary.version}</artifactId>
