@@ -127,7 +127,7 @@ class HBaseSQLContext private[hbase](
       classOf[TableInputFormat],
       classOf[ImmutableBytesWritable],
       classOf[Result],
-      new JobConf(job.getConfiguration),
+      job.getConfiguration,
       this)
     rdd.map(f)
   }
