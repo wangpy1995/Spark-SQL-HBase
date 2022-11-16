@@ -6,11 +6,13 @@ import org.apache.hadoop.hbase.filter._
 import org.apache.hadoop.hbase.util.Bytes
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.catalog.CatalogTable
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeMap, AttributeSet, Expression, UnsafeProjection}
 import org.apache.spark.sql.execution.LeafExecNode
-import org.apache.spark.sql.execution.metric.SQLMetrics
+import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
+import org.apache.spark.sql.hbase.SparkHBaseConstants.TABLE_CONSTANTS
 import org.apache.spark.sql.hbase._
-import org.apache.spark.sql.hbase.utils.{HBaseSparkDataUtils, HBaseSparkFilterUtils}
+import org.apache.spark.sql.hbase.utils.{HBaseSparkDataUtils, HBaseSparkFilterUtils, HBaseSparkFormatUtils}
 
 /**
  * Created by wpy on 17-5-16.
@@ -22,11 +24,11 @@ case class HBaseTableScanExec(
                                filter: Seq[Expression])(
                                @transient private val hbaseSession: HBaseSession)
   extends LeafExecNode {
-  val meta = plan.tableMeta
-  val parameters = meta.properties
-  val tableName = meta.identifier.database.get + ":" + meta.identifier.table
+  val meta: CatalogTable = plan.tableMeta
+  val parameters: Map[String, String] = meta.properties
+  val tableName: String = meta.identifier.database.get + ":" + meta.identifier.table
 
-  override lazy val metrics = Map(
+  override lazy val metrics: Map[String, SQLMetric] = Map(
     "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"))
 
   override def producedAttributes: AttributeSet = outputSet ++
@@ -53,19 +55,35 @@ case class HBaseTableScanExec(
     //read data from hbase
     hbaseSession.sqlContext.hbaseRDD(TableName.valueOf(tableName), scan)
       .mapPartitionsWithIndexInternal { (index, iter) =>
+        //判断schema中是否包含row_key信息
+        val zippedSchema = schema.zipWithIndex
         val proj = UnsafeProjection.create(schema)
-        val columnFamily = schema.map { field =>
-          val cf_q = field.name.split("_", 2)
-          (Bytes.toBytes(cf_q.head),
-            Bytes.toBytes(cf_q.last),
+        val columnFamily = zippedSchema.map { case (field, idx) =>
+          val separateName = HBaseSparkFormatUtils.splitColumnAndQualifierName(field.name)
+          (Bytes.toBytes(separateName.familyName),
+            Bytes.toBytes(separateName.qualifierName),
+            idx,
             HBaseSparkDataUtils.genHBaseFieldConverter(field.dataType))
         }
         proj.initialize(index)
         val size = schema.length
-        iter.map { result =>
-          val r = HBaseSparkDataUtils.hbaseResult2InternalRow(result._2, size, columnFamily)
-          numOutputRows += 1
-          proj(r)
+        val rowKey = zippedSchema.find(_._1.name == TABLE_CONSTANTS.ROW_KEY.getValue)
+        if (rowKey.isDefined) {
+          //需要rowKey数据
+          val rowIdx = rowKey.get._2
+          val filteredColumnFamily = columnFamily.filter(_._3 != rowIdx)
+          iter.map { result =>
+            val r = HBaseSparkDataUtils.hbaseResult2InternalRowWithRowKey(result._2, size, filteredColumnFamily, columnFamily(rowIdx))
+            numOutputRows += 1
+            proj(r)
+          }
+        } else {
+          //不需要rowKey数据
+          iter.map { result =>
+            val r = HBaseSparkDataUtils.hbaseResult2InternalRowWithoutRowKey(result._2, size, columnFamily)
+            numOutputRows += 1
+            proj(r)
+          }
         }
       }
   }
@@ -76,18 +94,17 @@ case class HBaseTableScanExec(
   //columnFamily_QualifierName <=== requestAttribute
   def addColumnFamiliesToScan(scan: Scan, filters: Option[Filter], predicate: Seq[Expression]): Scan = {
     // 添加需要显示结果的列
-    requestedAttributes.foreach { qualifier =>
-      val column_qualifier = qualifier.name.split("_", 2)
-      if (qualifier.name != "row_key")
-        scan.addColumn(Bytes.toBytes(column_qualifier.head), Bytes.toBytes(column_qualifier.last))
+    requestedAttributes.foreach { attribute =>
+      val separateName = HBaseSparkFormatUtils.splitColumnAndQualifierName(attribute.name)
+      if (attribute.name != TABLE_CONSTANTS.ROW_KEY.getValue)
+        scan.addColumn(Bytes.toBytes(separateName.familyName), Bytes.toBytes(separateName.qualifierName))
     }
     // 添加需要过滤的列
-    predicate.foreach { qualifier =>
-      val column_qualifiers = qualifier.references.map(_.toAttribute).toSet
-      column_qualifiers.foreach { qualifier =>
-        val column_qualifier = qualifier.name.split("_", 2)
-        if (qualifier.name != "row_key")
-          scan.addColumn(Bytes.toBytes(column_qualifier.head), Bytes.toBytes(column_qualifier.last))
+    predicate.foreach { expression =>
+      val attributes = expression.references.map(_.toAttribute).toSet
+      attributes.filter(_.name != TABLE_CONSTANTS.ROW_KEY.getValue).foreach { attribute =>
+        val separateName = HBaseSparkFormatUtils.splitColumnAndQualifierName(attribute.name)
+        scan.addColumn(Bytes.toBytes(separateName.familyName), Bytes.toBytes(separateName.qualifierName))
       }
     }
     //

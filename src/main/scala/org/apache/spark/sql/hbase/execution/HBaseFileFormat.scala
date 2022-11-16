@@ -14,7 +14,8 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
 import org.apache.spark.sql.execution.datasources.{FileFormat, OutputWriter, OutputWriterFactory, PartitionedFile}
-import org.apache.spark.sql.hbase.utils.HBaseSparkDataUtils
+import org.apache.spark.sql.hbase.SparkHBaseConstants.TABLE_CONSTANTS
+import org.apache.spark.sql.hbase.utils.{HBaseSparkDataUtils, HBaseSparkFormatUtils}
 import org.apache.spark.sql.sources.{DataSourceRegister, Filter}
 import org.apache.spark.sql.types._
 import org.apache.spark.util.SerializableConfiguration
@@ -72,16 +73,16 @@ class HBaseFileFormat
                             options: Map[String, String],
                             hadoopConf: Configuration): PartitionedFile => Iterator[InternalRow] = {
     val requiredQualifierNameMap = new java.util.TreeMap[HBaseRowArrayByteBuff, ((InternalRow, Int, Array[Byte], Int, Int) => Unit, Int)]()
-    val rowKeyField = dataSchema.find(_.name == "row_key")
+    val rowKeyField = dataSchema.find(_.name == TABLE_CONSTANTS.ROW_KEY.getValue)
     assert(rowKeyField.isDefined)
     val rowKeyConverter = HBaseSparkDataUtils.genHBaseFieldConverterWithOffset(rowKeyField.get.dataType)
     val requiredEmpty = requiredSchema.isEmpty
-    val requiredSchemaContainsRowKey = requiredSchema.exists(_.name == "row_key")
+    val requiredSchemaContainsRowKey = requiredSchema.exists(_.name == TABLE_CONSTANTS.ROW_KEY.getValue)
     val requiredRowKeyOnly = requiredSchema.length == 1 && requiredSchemaContainsRowKey
     val len = requiredSchema.length
-    val rowKeyIdx = if (requiredSchemaContainsRowKey) requiredSchema.getFieldIndex("row_key").get else len
+    val rowKeyIdx = if (requiredSchemaContainsRowKey) requiredSchema.getFieldIndex(TABLE_CONSTANTS.ROW_KEY.getValue).get else len
 
-    requiredSchema.filter(_.name != "row_key").foreach { field =>
+    requiredSchema.filter(_.name != TABLE_CONSTANTS.ROW_KEY.getValue).foreach { field =>
       val qualifier = new HBaseRowArrayByteBuff(Bytes.toBytes(field.name))
       val converter = HBaseSparkDataUtils.genHBaseFieldConverterWithOffset(field.dataType)
       val idx = requiredSchema.getFieldIndex(field.name).get
@@ -198,12 +199,10 @@ class HBaseOutputWriter(context: TaskAttemptContext, dataSchema: StructType) ext
   val rowKeyConverter: (InternalRow, Int) => Array[Byte] = HBaseSparkDataUtils.genInternalRowToHBaseConverter(dataSchema(rowKeyIdx).dataType)
 
   val schemaMap: Map[String, (Array[Byte], Array[Byte], Option[Int], (InternalRow, Int) => Array[Byte])] = dataSchema.map { field =>
-    val familyQualifierName = field.name.split("_", 2)
-    val familyName = Bytes.toBytes(familyQualifierName.head)
-    val qualifierName = Bytes.toBytes(familyQualifierName.last)
+    val separateName = HBaseSparkFormatUtils.splitColumnAndQualifierName(field.name)
     field.name -> (
-      familyName,
-      qualifierName,
+      Bytes.toBytes(separateName.familyName),
+      Bytes.toBytes(separateName.qualifierName),
       dataSchema.getFieldIndex(field.name),
       HBaseSparkDataUtils.genInternalRowToHBaseConverter(field.dataType))
   }.toMap

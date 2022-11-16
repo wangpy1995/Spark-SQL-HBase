@@ -53,4 +53,10 @@ class TestSql extends AnyFunSuite {
     hs.sql("select * from hbase.meta").show()
     hs.sql(s"select * from $TEST_NAMESPACE.$TEST_TABLE_NAME").show()
   }
+
+  test("select one col"){
+    val regionInfo = hs.sql("select `info:regioninfo` from hbase.meta").cache()
+    regionInfo.show()
+    println(regionInfo.collect().mkString("Array(", ", ", ")"))
+  }
 }

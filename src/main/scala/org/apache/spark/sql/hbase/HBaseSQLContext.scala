@@ -17,7 +17,9 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalog.Catalog
 import org.apache.spark.sql.catalyst.catalog.{ExternalCatalogEvent, ExternalCatalogWithListener}
+import org.apache.spark.sql.hbase.types.RegionInfoUDT
 import org.apache.spark.sql.internal.{SessionState, SharedState, StaticSQLConf}
+import org.apache.spark.sql.types.UDTRegistration
 import org.apache.spark.sql.{SQLContext, SparkSession}
 import org.apache.spark.{SerializableWritable, SparkContext}
 
@@ -30,11 +32,6 @@ import scala.reflect.ClassTag
 
 /**
  * 扩展SparkSQLContext功能, 提供对HBase的支持
- *
- * @param _hbaseSession
- * @param config
- * @param extraConfig
- * @param tmpHdfsConfigFile
  */
 class HBaseSQLContext private[hbase](
                                       @(transient@param) _hbaseSession: HBaseSession,
@@ -77,11 +74,11 @@ class HBaseSQLContext private[hbase](
       null)
   }
 
-  def this(sc: SparkContext) = this(sc, Map.empty[String,String])
+  def this(sc: SparkContext) = this(sc, Map.empty[String, String])
 
   def this(sc: JavaSparkContext, extraConfig: Map[String, String]) = this(sc.sc, extraConfig)
 
-  def this(sc: JavaSparkContext) = this(sc.sc, Map.empty[String,String])
+  def this(sc: JavaSparkContext) = this(sc.sc, Map.empty[String, String])
 
   /**
    * Returns a new HBaseContext as new session, which will have separated SQLConf, UDF/UDAF,
@@ -104,30 +101,6 @@ class HBaseSQLContext private[hbase](
     sparkSession.catalog.refreshTable(tableName)
   }
 
-
-  /**
-   * 用于从设置中读取hadoop集群安全认证数据
-   *
-   * @tparam T
-   */
-  def applyCreds[T]() {
-    //    credentials = SparkHadoopUtil.get.getCurrentUserCredentials()
-    credentials = null
-
-    logDebug("appliedCredentials:" + appliedCredentials + ",credentials:" + credentials)
-
-    if (!appliedCredentials && credentials != null) {
-      appliedCredentials = true
-
-      @transient val ugi = UserGroupInformation.getCurrentUser
-      ugi.addCredentials(credentials)
-      // specify that this is a proxy user
-      ugi.setAuthenticationMethod(AuthenticationMethod.PROXY)
-
-      ugi.addCredentials(credentialsConf.value.value)
-    }
-  }
-
   /**
    * This function will use the native HBase TableInputFormat with the
    * given scan object to generate a new RDD
@@ -143,6 +116,7 @@ class HBaseSQLContext private[hbase](
 
     val job: Job = Job.getInstance(getConf(broadcastedConf))
 
+
     TableMapReduceUtil.initCredentials(job)
     TableMapReduceUtil.initTableMapperJob(tableName, scan,
       classOf[IdentityTableMapper], null, null, job)
@@ -153,7 +127,7 @@ class HBaseSQLContext private[hbase](
       classOf[TableInputFormat],
       classOf[ImmutableBytesWritable],
       classOf[Result],
-      job.getConfiguration,
+      new JobConf(job.getConfiguration),
       this)
     rdd.map(f)
   }
@@ -200,11 +174,11 @@ class HBaseSQLContext private[hbase](
    */
   private class GetMapPartition[T, U](tableName: TableName,
                                       batchSize: Integer,
-                                      makeGet: (T) => Get,
-                                      convertResult: (Result) => U)
+                                      makeGet: T => Get,
+                                      convertResult: Result => U)
     extends Serializable {
 
-    val tName = tableName.getName
+    val tName: Array[Byte] = tableName.getName
 
     def run(iterator: Iterator[T], connection: Connection): Iterator[U] = {
       val table = connection.getTable(TableName.valueOf(tName))
@@ -271,6 +245,7 @@ class HBaseSession(
                     @transient val config: Configuration,
                     @transient extraConfig: Map[String, String]) extends SparkSession(sc) {
   self =>
+  UDTRegistration.register(classOf[RegionInfo].getCanonicalName, classOf[RegionInfoUDT].getCanonicalName)
   @transient
   override lazy val sessionState: SessionState = {
     new HBaseSessionStateBuilder(this, None).build()

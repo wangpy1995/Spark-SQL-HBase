@@ -3,6 +3,7 @@ package org.apache.spark.sql.hbase
 import org.apache.spark.annotation.{Experimental, Stable}
 import org.apache.spark.sql.catalyst.analysis.{Analyzer, ResolveSessionCatalog}
 import org.apache.spark.sql.catalyst.catalog.ExternalCatalogWithListener
+import org.apache.spark.sql.catalyst.parser.ParserInterface
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution.SparkPlanner
@@ -13,6 +14,7 @@ import org.apache.spark.sql.execution.command.CommandCheck
 import org.apache.spark.sql.execution.datasources._
 import org.apache.spark.sql.execution.datasources.v2.{DataSourceV2Strategy, TableCapabilityCheck}
 import org.apache.spark.sql.execution.streaming.ResolveWriteToStream
+import org.apache.spark.sql.hbase.execution.HBaseSqlParser
 import org.apache.spark.sql.internal.{BaseSessionStateBuilder, SessionState, SparkUDFExpressionBuilder}
 import org.apache.spark.sql.{SparkSession, Strategy}
 
@@ -22,19 +24,19 @@ import org.apache.spark.sql.{SparkSession, Strategy}
 @Experimental
 @Stable
 class HBaseSessionStateBuilder(
-                                session: SparkSession,
+                                hbaseSession: HBaseSession,
                                 parentState: Option[SessionState] = None)
-  extends BaseSessionStateBuilder(session, parentState) {
+  extends BaseSessionStateBuilder(hbaseSession.asInstanceOf[SparkSession], parentState) {
 
-  def this(hbaseSession: HBaseSession) = this(hbaseSession.asInstanceOf[SparkSession])
+  //  override protected lazy val sqlParser: ParserInterface = extensions.buildParser(session, new HBaseSqlParser())
 
   override protected lazy val catalog: HBaseSessionCatalog = {
     val catalog = new HBaseSessionCatalog(
       () => externalCatalog,
-      () => session.sharedState.globalTempViewManager,
+      () => hbaseSession.sharedState.globalTempViewManager,
       functionRegistry,
       tableFunctionRegistry,
-      SessionState.newHadoopConf(session.sparkContext.hadoopConfiguration, conf),
+      SessionState.newHadoopConf(hbaseSession.sparkContext.hadoopConfiguration, conf),
       sqlParser,
       resourceLoader,
       new SparkUDFExpressionBuilder)
@@ -43,7 +45,7 @@ class HBaseSessionStateBuilder(
   }
 
   private def externalCatalog: ExternalCatalogWithListener =
-    session.sharedState.externalCatalog
+    hbaseSession.sharedState.externalCatalog
 
 
   /**
@@ -51,10 +53,10 @@ class HBaseSessionStateBuilder(
    */
   override protected def analyzer: Analyzer = new Analyzer(catalogManager) {
     override val extendedResolutionRules: Seq[Rule[LogicalPlan]] = {
-      new ResolveHBaseTable(session) +:
-        new FindDataSourceTable(session) +:
-        new ResolveSQLOnFile(session) +:
-        new FallBackFileSourceV2(session) +:
+      new ResolveHBaseTable(hbaseSession) +:
+        new FindDataSourceTable(hbaseSession) +:
+        new ResolveSQLOnFile(hbaseSession) +:
+        new FallBackFileSourceV2(hbaseSession) +:
         ResolveEncodersInScalaAgg +:
         new ResolveSessionCatalog(catalogManager) +:
         ResolveWriteToStream +:
@@ -63,7 +65,7 @@ class HBaseSessionStateBuilder(
 
     override val postHocResolutionRules: Seq[Rule[LogicalPlan]] =
       DetectAmbiguousSelfJoin +:
-        PreprocessTableCreation(session) +:
+        PreprocessTableCreation(hbaseSession) +:
         PreprocessTableInsertion +:
         DataSourceAnalysis(this) +:
         HBaseAnalysis +:
@@ -79,7 +81,7 @@ class HBaseSessionStateBuilder(
   }
 
   override protected def planner: SparkPlanner = {
-    new SparkPlanner(session, experimentalMethods) with HBaseStrategies {
+    new SparkPlanner(hbaseSession, experimentalMethods) with HBaseStrategies {
       override val sparkSession: SparkSession = session
 
       override def extraPlanningStrategies: Seq[Strategy] =
@@ -106,5 +108,8 @@ class HBaseSessionStateBuilder(
     }
   }
 
-  override protected def newBuilder: NewBuilder = new HBaseSessionStateBuilder(_, _)
+  override protected def newBuilder: NewBuilder = (session, _) => {
+    val hs = new HBaseSession(session.sparkContext, session.sparkContext.hadoopConfiguration, Map.empty)
+    new HBaseSessionStateBuilder(hs)
+  }
 }

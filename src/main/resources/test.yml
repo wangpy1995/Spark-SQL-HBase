@@ -32,7 +32,7 @@ hbase:meta:
   table:
     state: string
   info:
-    regioninfo: binary
+    regioninfo: RegionInfo
     seqnumDuringOpen: long
     server: string
     serverstartcode: timestamp

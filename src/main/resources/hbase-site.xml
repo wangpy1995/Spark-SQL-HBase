@@ -49,7 +49,7 @@
   </property>
   <property>
     <name>hbase.tmp.dir</name>
-    <value>file:///home/pw/IdeaProjects/hbase/tmp</value>
+    <value>/home/pw/IdeaProjects/hbase/tmp</value>
   </property>
   <property>
     <name>hbase.unsafe.stream.capability.enforce</name>

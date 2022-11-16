@@ -7,6 +7,7 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.hbase.HBaseConfiguration
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.types.UDTRegistration
 
 import java.util.Properties
 
@@ -27,7 +28,7 @@ object HBaseSQLClient {
   private val sparkConf = new SparkConf().setMaster("local[*]").setAppName("test").set("spark.hadoopRDD.ignoreEmptySplits","false")
   private val ss = SparkSession.builder().config(sparkConf).getOrCreate()
   private val sc = ss.sparkContext
-  val hc = new HBaseSession(sc, new Configuration(),extraConfigs)
+  val hs = new HBaseSession(sc, new Configuration(),extraConfigs)
 
   def main(args: Array[String]): Unit = {
 
@@ -79,7 +80,7 @@ object HBaseSQLClient {
   }
 
 
-  private def processLine(line: String, allowInterrupting: Boolean) = {
+  private def processLine(line: String, allowInterrupting: Boolean): Unit = {
 
     val input = line.substring(0, line.length - 1)
     try {
@@ -90,13 +91,13 @@ object HBaseSQLClient {
     }
   }
 
-  private def process(input: String) = {
+  private def process(input: String): Unit = {
     val token = input.split("\\s")
     token(0).toUpperCase match {
       case "EXIT" => ss.close()
         System.exit(0)
 
-      case _ => hc.sql(input).show(30)
+      case _ => hs.sql(input).show(30)
     }
   }
 

@@ -19,7 +19,9 @@ import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
 import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
-import org.apache.spark.sql.hbase.execution.HBaseFileFormat
+import org.apache.spark.sql.hbase.SparkHBaseConstants.TABLE_CONSTANTS
+import org.apache.spark.sql.hbase.execution.{HBaseFileFormat, HBaseSqlParser}
+import org.apache.spark.sql.hbase.utils.HBaseSparkFormatUtils
 import org.apache.spark.sql.types.{StructField, StructType}
 import org.apache.spark.util.{CircularBuffer, SerializableConfiguration}
 import org.yaml.snakeyaml.Yaml
@@ -31,8 +33,8 @@ import scala.annotation.meta.param
 import scala.collection.JavaConverters._
 
 /**
-  * Created by wpy on 2017/5/12.
-  */
+ * Created by wpy on 2017/5/12.
+ */
 class HBaseClientImpl(
                        @(transient@param) override val version: HBaseVersion,
                        @(transient@param) sparkConf: SparkConf,
@@ -41,7 +43,7 @@ class HBaseClientImpl(
                        @(transient@param) initClassLoader: ClassLoader,
                        @(transient@param) val clientLoader: IsolatedClientLoader)
   extends HBaseClient
-    with Logging{
+    with Logging {
 
   private val schemaPath = extraConfig("schema.file.url")
 
@@ -65,8 +67,8 @@ class HBaseClientImpl(
   private val retryDelayMillis = conf.getLong(HConstants.HBASE_CLIENT_OPERATION_TIMEOUT, 12000)
 
   /**
-    * Runs `f` with multiple retries in case the hbase metastore is temporarily unreachable.
-    */
+   * Runs `f` with multiple retries in case the hbase metastore is temporarily unreachable.
+   */
   private def retryLocked[A](f: => A): A = synchronized {
     // HBase sometimes retries internally, so set a deadline to avoid compounding delays.
     val deadline = System.nanoTime + (retryLimit * retryDelayMillis * 1e6).toLong
@@ -109,6 +111,7 @@ class HBaseClientImpl(
 
   /**
    * 读取yml文件, 每次getTable时都会重新读取
+   *
    * @return
    */
   private def getSchemaProp = {
@@ -129,18 +132,23 @@ class HBaseClientImpl(
 
   /**
    * 获取各个qualifier对应的数据类型
-   * @param schemaMap
-   * @param tableName
+   *
+   * @param schemaMap 表结构
+   * @param tableName 表名
    * @return
    */
   private def getSchema(schemaMap: ju.Map[String, ju.Map[String, ju.Map[String, String]]], tableName: String) = StructType {
-    val rowKeyType = StructField("row_key", CatalystSqlParser.parseDataType(schemaMap.get(tableName).remove("row").get("key")))
-    (Seq(rowKeyType) ++ schemaMap.get(tableName).asScala.flatMap { col =>
-      val familyName = col._1
-      col._2.asScala.map { qualifier =>
-        StructField(familyName + "_" + qualifier._1, CatalystSqlParser.parseDataType(qualifier._2))
+    val tableSchema = schemaMap.get(tableName)
+    val rowKeyField = StructField(TABLE_CONSTANTS.ROW_KEY.getValue, CatalystSqlParser.parseDataType(tableSchema.remove("row").get("key")))
+    val columnQualifierFields = tableSchema.asScala.flatMap { case (familyName, qualifier) =>
+      qualifier.asScala.map { case (qualifierName, dataType) =>
+        //family和qualifier字段的名字用“:”组合
+        StructField(
+          HBaseSparkFormatUtils.combineColumnAndQualifierName(familyName, qualifierName),
+          HBaseSqlParser.parseDataType(dataType))
       }
-    }).toArray
+    }.toList
+    rowKeyField :: columnQualifierFields
   }
 
   def connection: Connection = {
@@ -207,7 +215,7 @@ class HBaseClientImpl(
     if (databaseExists(name))
       CatalogDatabase(name, name + " description", new URI(conf.get("hbase.rootdit") + s"/data/$name"), Map.empty)
     else
-      throw new NoSuchDatabaseException(name)
+      throw NoSuchDatabaseException(name)
   }
 
   /** Return whether a table/view with the specified name exists. */
@@ -275,7 +283,7 @@ class HBaseClientImpl(
           // the class name directly. However, for non-native tables, there is no interface to get
           // the format class name, so we may still throw ClassNotFound in this case.
           inputFormat = Some(classOf[TableInputFormat].getTypeName),
-          outputFormat = Some(classOf[(ImmutableBytesWritable,Result)].getTypeName),
+          outputFormat = Some(classOf[(ImmutableBytesWritable, Result)].getTypeName),
           serde = None,
           compressed = false,
           properties = Map.empty),
@@ -324,7 +332,7 @@ class HBaseClientImpl(
     //start get properties & create new table
 
     //get column_family properties
-    val pattern = "\\{([0-9a-zA-Z]*):\\((([0-9a-zA-Z]*([,])?)*)\\)\\}".r
+    val pattern = "\\{([0-9a-zA-Z]*):\\((([0-9a-zA-Z]*([,])?)*)\\)}".r
 
     //unused
     /*val colQualifier = cols.split(";").map{
@@ -374,58 +382,58 @@ class HBaseClientImpl(
   }
 
   /**
-    * Drop the specified database, if it exists.
-    *
-    * @param name              database to drop
-    * @param ignoreIfNotExists if true, do not throw error if the database does not exist
-    * @param cascade           whether to remove all associated objects such as tables and functions
-    */
+   * Drop the specified database, if it exists.
+   *
+   * @param name              database to drop
+   * @param ignoreIfNotExists if true, do not throw error if the database does not exist
+   * @param cascade           whether to remove all associated objects such as tables and functions
+   */
   override def dropDatabase(name: String, ignoreIfNotExists: Boolean, cascade: Boolean): Unit = {
     admin.deleteNamespace(name)
   }
 
   /**
-    * Alter a database whose name matches the one specified in `database`, assuming it exists.
-    */
+   * Alter a database whose name matches the one specified in `database`, assuming it exists.
+   */
   override def alterDatabase(database: CatalogDatabase): Unit = {
     admin.modifyNamespace(NamespaceDescriptor.create(database.name).build())
   }
 
   /**
-    * Create one or many partitions in the given table.
-    */
+   * Create one or many partitions in the given table.
+   */
   override def createPartitions(db: String, table: String, parts: Seq[CatalogTablePartition], ignoreIfExists: Boolean): Unit = {
     throw new UnsupportedOperationException("createPartitions")
   }
 
   /**
-    * Drop one or many partitions in the given table, assuming they exist.
-    */
+   * Drop one or many partitions in the given table, assuming they exist.
+   */
   override def dropPartitions(db: String, table: String, specs: Seq[TablePartitionSpec], ignoreIfNotExists: Boolean, purge: Boolean, retainData: Boolean): Unit = {
     throw new UnsupportedOperationException("dropPartitions")
   }
 
   /**
-    * Rename one or many existing table partitions, assuming they exist.
-    */
+   * Rename one or many existing table partitions, assuming they exist.
+   */
   override def renamePartitions(db: String, table: String, specs: Seq[TablePartitionSpec], newSpecs: Seq[TablePartitionSpec]): Unit = {
     throw new UnsupportedOperationException("renamePartitions")
   }
 
   /**
-    * Alter one or more table partitions whose specs match the ones specified in `newParts`,
-    * assuming the partitions exist.
-    */
+   * Alter one or more table partitions whose specs match the ones specified in `newParts`,
+   * assuming the partitions exist.
+   */
   override def alterPartitions(db: String, table: String, newParts: Seq[CatalogTablePartition]): Unit = {
     throw new UnsupportedOperationException("alterPartitions")
   }
 
   /**
-    * Returns the partition names for the given table that match the supplied partition spec.
-    * If no partition spec is specified, all partitions are returned.
-    *
-    * The returned sequence is sorted as strings.
-    */
+   * Returns the partition names for the given table that match the supplied partition spec.
+   * If no partition spec is specified, all partitions are returned.
+   *
+   * The returned sequence is sorted as strings.
+   */
   override def getPartitionNames(table: CatalogTable, partialSpec: Option[TablePartitionSpec]): Seq[String] = {
     throw new UnsupportedOperationException("getPartitionNames")
   }
@@ -436,9 +444,9 @@ class HBaseClientImpl(
   }
 
   /**
-    * Returns the partitions for the given table that match the supplied partition spec.
-    * If no partition spec is specified, all partitions are returned.
-    */
+   * Returns the partitions for the given table that match the supplied partition spec.
+   * If no partition spec is specified, all partitions are returned.
+   */
   override def getPartitions(catalogTable: CatalogTable, partialSpec: Option[TablePartitionSpec]): Seq[CatalogTablePartition] = {
     throw new UnsupportedOperationException("getPartition")
   }
@@ -488,7 +496,7 @@ class HBaseClientImpl(
 }
 
 /**
-  * Converts the native table metadata representation format CatalogTable to HBase's Table.
-  */
+ * Converts the native table metadata representation format CatalogTable to HBase's Table.
+ */
 object HBaseClientImpl {
 }

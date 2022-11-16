@@ -1,24 +1,24 @@
 package org.apache.spark.sql.hbase.utils
 
-import org.apache.hadoop.hbase.client.Result
+import org.apache.hadoop.hbase.client.{RegionInfo, Result}
 import org.apache.hadoop.hbase.util.Bytes
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
-import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DoubleType, FloatType, IntegerType, LongType, ShortType, StringType, TimestampType}
+import org.apache.spark.sql.hbase.types.RegionInfoUDT
+import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DoubleType, FloatType, IntegerType, LongType, ObjectType, ShortType, StringType, TimestampType, UserDefinedType}
 import org.apache.spark.unsafe.types.UTF8String
 
 object HBaseSparkDataUtils extends Serializable {
   // column family, qualifier, a function that could transform bytes data and set into InternalRow
-  type CF_QUALIFIER_CONVERTER = (Array[Byte], Array[Byte], (InternalRow, Int, Array[Byte]) => Unit)
+  type CF_QUALIFIER_CONVERTER = (Array[Byte], Array[Byte], Int, (InternalRow, Int, Array[Byte]) => Unit)
 
-  private val HBASE_ROW_BYTES = Bytes.toBytes("row")
-  private val HBASE_KEY_BYTES = Bytes.toBytes("key")
+  private val HBASE_ROW_BYTES = Bytes.toBytes("row_key")
 
   /**
    * generate a data converter, this converter could get data from
    * spark [InternalRow]  and transform data to HBase Bytes Value with dataType
    *
-   * @param dataType
+   * @param dataType 数据类型
    * @return
    */
   def genInternalRowToHBaseConverter(dataType: DataType): (InternalRow, Int) => Array[Byte] = dataType match {
@@ -53,7 +53,7 @@ object HBaseSparkDataUtils extends Serializable {
   /**
    * generate a data converter that could transform HBase Bytes Value to Spark InternalRow
    *
-   * @param dataType
+   * @param dataType 数据类型
    * @return
    */
   def genHBaseFieldConverter(dataType: DataType): (InternalRow, Int, Array[Byte]) => Unit = dataType match {
@@ -80,6 +80,9 @@ object HBaseSparkDataUtils extends Serializable {
       (internalRow, i, v) => internalRow.update(i, Bytes.toDouble(v))
     case FloatType =>
       (internalRow, i, v) => internalRow.update(i, Bytes.toFloat(v))
+
+    case RegionInfoUDT =>
+      (internalRow, i, v) => internalRow.update(i, v)
 
     case _ =>
       (internalRow, i, v) => internalRow.update(i, v)
@@ -114,24 +117,37 @@ object HBaseSparkDataUtils extends Serializable {
       (internalRow, i, v, offset, len) => internalRow.update(i, Bytes.copy(v, offset, len))
   }
 
-  def hbaseResult2InternalRow(result: Result, size: Int, cols: Seq[CF_QUALIFIER_CONVERTER]): InternalRow = {
-    var i = 0
+  /**
+   * 对HBase中qualifier的数据进行转换
+   * 不支持row_key
+   *
+   * @param result HBaseResult
+   * @param size   查询列的个数
+   * @param cols   查询的列集合(不含row_key)
+   * @return
+   */
+  def hbaseResult2InternalRowWithoutRowKey(result: Result, size: Int, cols: Seq[CF_QUALIFIER_CONVERTER]): InternalRow = {
     val internalRow = new GenericInternalRow(size)
-    cols.foreach { case (family, qualifier, convert) =>
-      val v = if (Bytes.equals(family, HBASE_ROW_BYTES) && Bytes.equals(qualifier, HBASE_KEY_BYTES))
-        result.getRow
-      else
-        result.getValue(family, qualifier)
-
+    cols.foreach { case (family, qualifier, idx, convert) =>
+      val v = result.getValue(family, qualifier)
       if (v == null) {
-        internalRow.update(i, null)
+        internalRow.update(idx, null)
       } else {
-        convert(internalRow, i, v)
+        convert(internalRow, idx, v)
       }
-      i += 1
     }
     internalRow
   }
+
+  def hbaseResult2InternalRowWithRowKey(result: Result,
+                                        size: Int,
+                                        cols: Seq[CF_QUALIFIER_CONVERTER],
+                                        row: CF_QUALIFIER_CONVERTER): InternalRow = {
+    val internalRow = hbaseResult2InternalRowWithoutRowKey(result, size, cols)
+    row._4(internalRow, row._3, result.getRow)
+    internalRow
+  }
+
 
   def toBytes(data: Any, dataType: DataType): Array[Byte] = dataType match {
     case ByteType if data.isInstanceOf[Byte] =>
