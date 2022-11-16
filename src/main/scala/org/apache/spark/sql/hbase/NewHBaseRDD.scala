@@ -19,7 +19,9 @@ package org.apache.spark.sql.hbase
 
 import org.apache.hadoop.classification.InterfaceAudience
 import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.mapred.JobConf
 import org.apache.hadoop.mapreduce.InputFormat
+import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.rdd.NewHadoopRDD
 import org.apache.spark.{InterruptibleIterator, Partition, SparkContext, TaskContext}
 
@@ -30,11 +32,11 @@ class NewHBaseRDD[K, V](@(transient@param) sc: SparkContext,
                         @(transient@param) inputFormatClass: Class[_ <: InputFormat[K, V]],
                         @(transient@param) keyClass: Class[K],
                         @(transient@param) valueClass: Class[V],
-                        @(transient@param) conf: Configuration,
-                        val hBaseContext: HBaseSQLContext) extends NewHadoopRDD(sc, inputFormatClass, keyClass, valueClass, conf) {
+                        @(transient@param) jconf: JobConf,
+                        val hBaseContext: HBaseSQLContext) extends NewHadoopRDD(sc, inputFormatClass, keyClass, valueClass, jconf) {
 
   override def compute(theSplit: Partition, context: TaskContext): InterruptibleIterator[(K, V)] = {
-    hBaseContext.applyCreds()
+    SparkHadoopUtil.get.addCredentials(jconf)
     super.compute(theSplit, context)
   }
 }
