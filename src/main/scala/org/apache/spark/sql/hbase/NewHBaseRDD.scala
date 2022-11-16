@@ -36,34 +36,6 @@ class NewHBaseRDD[K, V](@(transient@param) sc: SparkContext,
                         @(transient@param) valueClass: Class[V],
                         @transient private val _conf: Configuration,
                         val hBaseContext: HBaseSQLContext) extends NewHadoopRDD(sc, inputFormatClass, keyClass, valueClass, _conf) {
-  private val broadcastConf = sc.broadcast(new SerializableConfiguration(_conf))
-  private val shouldCloneJobConf = sparkContext.conf.getBoolean("spark.hadoop.cloneConf", defaultValue = false)
-
-  private def getConf: Configuration = {
-    val conf: Configuration = broadcastConf.value.value
-    if (shouldCloneJobConf) {
-      // Hadoop Configuration objects are not thread-safe, which may lead to various problems if
-      // one job modifies a configuration while another reads it (SPARK-2546).  This problem occurs
-      // somewhat rarely because most jobs treat the configuration as though it's immutable.  One
-      // solution, implemented here, is to clone the Configuration object.  Unfortunately, this
-      // clone can be very expensive.  To avoid unexpected performance regressions for workloads and
-      // Hadoop versions that do not suffer from these thread-safety issues, this cloning is
-      // disabled by default.
-      NewHBaseRDD.CONFIGURATION_INSTANTIATION_LOCK.synchronized {
-        logDebug("Cloning Hadoop Configuration")
-        // The Configuration passed in is actually a JobConf and possibly contains credentials.
-        // To keep those credentials properly we have to create a new JobConf not a Configuration.
-        if (conf.isInstanceOf[JobConf]) {
-          new JobConf(conf)
-        } else {
-          new Configuration(conf)
-        }
-      }
-    } else {
-      conf
-    }
-  }
-
   override def compute(theSplit: Partition, context: TaskContext): InterruptibleIterator[(K, V)] = {
     val jconf = new JobConf(getConf)
     SparkHadoopUtil.get.addCredentials(jconf)
