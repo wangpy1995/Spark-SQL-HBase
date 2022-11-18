@@ -20,8 +20,8 @@ class HBaseExternalCatalog(
 
   import CatalogTypes.TablePartitionSpec
 
-    val client: HBaseClient = IsolatedClientLoader.forVersion("3.0.0", "3.2.4", conf, hadoopConf, extraConfig).createClient()
-//  val client = new HBaseClientImpl(IsolatedClientLoader.hbaseVersion("3.0.0"), conf, hadoopConf, Map.empty, this.getClass.getClassLoader, null)
+  val client: HBaseClient = IsolatedClientLoader.forVersion("3.0.0", "3.2.4", conf, hadoopConf, extraConfig).createClient()
+  //  val client = new HBaseClientImpl(IsolatedClientLoader.hbaseVersion("3.0.0"), conf, hadoopConf, Map.empty, this.getClass.getClassLoader, null)
 
   override def createDatabase(dbDefinition: CatalogDatabase, ignoreIfExists: Boolean): Unit = {
     client.createDatabase(dbDefinition, ignoreIfExists)
@@ -172,8 +172,9 @@ class HBaseExternalCatalog(
     throw new UnsupportedOperationException("listFunctions")
   }
 
-  override def alterTableStats(db: String, table: String, stats: Option[CatalogStatistics]): Unit = {
-    throw new UnsupportedOperationException("alterTableStats")
+  override def alterTableStats(db: String, table: String, stats: Option[CatalogStatistics]): Unit = stats match {
+    case None => logInfo("alter table is ignored")
+    case _ => throw new UnsupportedOperationException("alterTableStats")
   }
 
   override def alterFunction(db: String, funcDefinition: CatalogFunction): Unit = {
@@ -181,36 +182,36 @@ class HBaseExternalCatalog(
   }
 }
 
-object HBaseExternalCatalog {
-  // If defined and larger than 3, a new table will be created with the nubmer of region specified.
-  val newTable = "newtable"
-  // The json string specifying hbase catalog information
-  val regionStart = "regionStart"
-  val defaultRegionStart = "aaaaaaa"
-  val regionEnd = "regionEnd"
-  val defaultRegionEnd = "zzzzzzz"
-  val tableCatalog = "catalog"
-  // The row key with format key1:key2 specifying table row key
-  val rowKey = "rowkey"
-  // The key for hbase table whose value specify namespace and table name
-  val table = "table"
-  // The namespace of hbase table
-  val nameSpace = "namespace"
-  // The name of hbase table
-  val tableName = "name"
-  // The name of columns in hbase catalog
-  val columns = "columns"
-  val cf = "cf"
-  val col = "col"
-  val `type` = "type"
-  // the name of avro schema json string
-  val avro = "avro"
-  val delimiter: Byte = 0
-  val serdes = "serdes"
-  val length = "length"
+  object HBaseExternalCatalog {
+    // If defined and larger than 3, a new table will be created with the nubmer of region specified.
+    val newTable = "newtable"
+    // The json string specifying hbase catalog information
+    val regionStart = "regionStart"
+    val defaultRegionStart = "aaaaaaa"
+    val regionEnd = "regionEnd"
+    val defaultRegionEnd = "zzzzzzz"
+    val tableCatalog = "catalog"
+    // The row key with format key1:key2 specifying table row key
+    val rowKey = "rowkey"
+    // The key for hbase table whose value specify namespace and table name
+    val table = "table"
+    // The namespace of hbase table
+    val nameSpace = "namespace"
+    // The name of hbase table
+    val tableName = "name"
+    // The name of columns in hbase catalog
+    val columns = "columns"
+    val cf = "cf"
+    val col = "col"
+    val `type` = "type"
+    // the name of avro schema json string
+    val avro = "avro"
+    val delimiter: Byte = 0
+    val serdes = "serdes"
+    val length = "length"
 
-  val SPARK_SQL_PREFIX = "spark.sql."
+    val SPARK_SQL_PREFIX = "spark.sql."
 
-  val TABLE_KEY: String = "hbase.table"
-  val SCHEMA_COLUMNS_MAPPING_KEY: String = "hbase.columns.mapping"
-}
+    val TABLE_KEY: String = "hbase.table"
+    val SCHEMA_COLUMNS_MAPPING_KEY: String = "hbase.columns.mapping"
+  }

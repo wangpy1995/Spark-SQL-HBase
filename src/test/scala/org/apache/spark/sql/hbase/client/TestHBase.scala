@@ -54,7 +54,7 @@ class TestHBase extends AnyFunSuite with Logging {
     val tableConn = conn.getTable(TableName.valueOf(tableName))
 
     def insertIntoPut(put: Put, bytesRowKey: Array[Byte], bytesColumnName: Array[Byte],
-                   formattedQualifier: String, splitterBytes: Array[Byte]) = {
+                      formattedQualifier: String, splitterBytes: Array[Byte]) = {
       //pattern: col+${splitter}+qualifier, A_01
       val qualifierBytes = Bytes.add(bytesColumnName, splitterBytes, Bytes.toBytes(formattedQualifier))
       //pattern: col+${splitter}+qualifier+${splitter}+rowKey, A_01_0001
@@ -112,9 +112,12 @@ class TestHBase extends AnyFunSuite with Logging {
     createUserNamespaceAndTable(
       TConstants.admin,
       TConstants.TEST_NAMESPACE,
+      //                  "pw:test_insert",
+      //                  "T",
       table,
       TConstants.TEST_COL_A,
-      TConstants.TEST_COL_B)
+      TConstants.TEST_COL_B
+    )
   }
 
   test("insert some data") {

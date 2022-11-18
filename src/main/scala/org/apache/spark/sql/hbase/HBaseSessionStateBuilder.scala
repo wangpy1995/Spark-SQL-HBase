@@ -67,8 +67,8 @@ class HBaseSessionStateBuilder(
       DetectAmbiguousSelfJoin +:
         PreprocessTableCreation(hbaseSession) +:
         PreprocessTableInsertion +:
-        DataSourceAnalysis(this) +:
         HBaseAnalysis +:
+        DataSourceAnalysis(this) +:
         customPostHocResolutionRules
 
     override val extendedCheckRules: Seq[LogicalPlan => Unit] =

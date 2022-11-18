@@ -2,13 +2,13 @@ package org.apache.spark.sql.hbase.execution
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileStatus, FileSystem, Path}
-import org.apache.hadoop.hbase.{Cell, CellBuilderType}
-import org.apache.hadoop.hbase.client.Put
+import org.apache.hadoop.hbase.{Cell, CellBuilderType, HBaseConfiguration}
+import org.apache.hadoop.hbase.client.{Mutation, Put}
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable
 import org.apache.hadoop.hbase.io.hfile.{HFile, HFileScanner}
-import org.apache.hadoop.hbase.mapreduce.HFileOutputFormat2
+import org.apache.hadoop.hbase.mapreduce.{HFileOutputFormat2, TableOutputFormat}
 import org.apache.hadoop.hbase.util.Bytes
-import org.apache.hadoop.mapreduce.{Job, RecordWriter, TaskAttemptContext}
+import org.apache.hadoop.mapreduce.{Job, JobID, RecordWriter, TaskAttemptContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.InternalRow
@@ -19,6 +19,9 @@ import org.apache.spark.sql.hbase.utils.{HBaseSparkDataUtils, HBaseSparkFormatUt
 import org.apache.spark.sql.sources.{DataSourceRegister, Filter}
 import org.apache.spark.sql.types._
 import org.apache.spark.util.SerializableConfiguration
+
+import java.text.SimpleDateFormat
+import java.util.{Date, Locale}
 
 /**
  * 以Table为单位存取HFile文件
@@ -55,13 +58,13 @@ class HBaseFileFormat
   /**
    * read HFile
    *
-   * @param sparkSession spark session
+   * @param sparkSession    spark session
    * @param dataSchema      data: HBase Qualifier
    * @param partitionSchema partition is not supported in HBase ,so empty partition here
    * @param requiredSchema  required HBase Qualifier
-   * @param filters Hbase filter
-   * @param options not use
-   * @param hadoopConf hadoop configuration
+   * @param filters         Hbase filter
+   * @param options         not use
+   * @param hadoopConf      hadoop configuration
    * @return
    */
   override def buildReader(
@@ -75,7 +78,7 @@ class HBaseFileFormat
     val requiredQualifierNameMap = new java.util.TreeMap[HBaseRowArrayByteBuff, ((InternalRow, Int, Array[Byte], Int, Int) => Unit, Int)]()
     val rowKeyField = dataSchema.find(_.name == TABLE_CONSTANTS.ROW_KEY.getValue)
     assert(rowKeyField.isDefined)
-    val rowKeyConverter = HBaseSparkDataUtils.genHBaseFieldConverterWithOffset(rowKeyField.get.dataType)
+    val rowKeyConverter = HBaseSparkDataUtils.genHBaseToInternalRowConverterWithOffset(rowKeyField.get.dataType)
     val requiredEmpty = requiredSchema.isEmpty
     val requiredSchemaContainsRowKey = requiredSchema.exists(_.name == TABLE_CONSTANTS.ROW_KEY.getValue)
     val requiredRowKeyOnly = requiredSchema.length == 1 && requiredSchemaContainsRowKey
@@ -84,14 +87,14 @@ class HBaseFileFormat
 
     requiredSchema.filter(_.name != TABLE_CONSTANTS.ROW_KEY.getValue).foreach { field =>
       val qualifier = new HBaseRowArrayByteBuff(Bytes.toBytes(field.name))
-      val converter = HBaseSparkDataUtils.genHBaseFieldConverterWithOffset(field.dataType)
+      val converter = HBaseSparkDataUtils.genHBaseToInternalRowConverterWithOffset(field.dataType)
       val idx = requiredSchema.getFieldIndex(field.name).get
       requiredQualifierNameMap.put(qualifier, (converter, idx))
     }
     val broadcastedHadoopConf = {
       sparkSession.sparkContext.broadcast(new SerializableConfiguration(hadoopConf))
     }
-        //return serializable function
+    //return serializable function
     hfile => {
       new Iterator[InternalRow] {
         //all fields must be serialized
@@ -99,7 +102,7 @@ class HBaseFileFormat
         val broadcastConfValue: Configuration = broadcastedHadoopConf.value.value
         val fs: FileSystem = FileSystem.get(broadcastConfValue)
         val hFileReader: HFile.Reader = HFile.createReader(fs, new Path(hfile.filePath), broadcastedHadoopConf.value.value)
-        val scanner: HFileScanner = hFileReader.getScanner(broadcastConfValue,false, false)
+        val scanner: HFileScanner = hFileReader.getScanner(broadcastConfValue, false, false)
         var hashNextValue: Boolean = false
 
         override def hasNext: Boolean = {
@@ -178,13 +181,19 @@ class HBaseFileFormat
                             job: Job,
                             options: Map[String, String],
                             dataSchema: StructType): OutputWriterFactory = {
+    val dirPath = new Path(options("path"))
+    val tableName = dirPath.getName
+    val namespace = dirPath.getParent.getName
     new OutputWriterFactory {
       override def getFileExtension(context: TaskAttemptContext): String = "hfile"
 
       override def newInstance(
                                 path: String,
                                 dataSchema: StructType,
-                                context: TaskAttemptContext): OutputWriter = new HBaseOutputWriter(context, dataSchema)
+                                context: TaskAttemptContext): OutputWriter = {
+        context.getConfiguration.set("hbase.mapreduce.hfileoutputformat.table.name", s"$namespace:$tableName")
+        new HBaseOutputWriter(context, dataSchema)
+      }
     }
 
   }
@@ -193,18 +202,20 @@ class HBaseFileFormat
 }
 
 class HBaseOutputWriter(context: TaskAttemptContext, dataSchema: StructType) extends OutputWriter {
-  val hFileWriter: RecordWriter[ImmutableBytesWritable, Cell] = new HFileOutputFormat2().getRecordWriter(context)
+  val hFileOutputFormat = new HFileOutputFormat2()
+  val hfileRecordWriter: RecordWriter[ImmutableBytesWritable, Cell] = hFileOutputFormat.getRecordWriter(context)
 
-  val rowKeyIdx: Int = dataSchema.getFieldIndex("rowKey").get
-  val rowKeyConverter: (InternalRow, Int) => Array[Byte] = HBaseSparkDataUtils.genInternalRowToHBaseConverter(dataSchema(rowKeyIdx).dataType)
+  val rowKeyIdx: Int = dataSchema.getFieldIndex(TABLE_CONSTANTS.ROW_KEY.getValue).get
+  val filteredDataSchema: Seq[StructField] = dataSchema.filter(_.name != TABLE_CONSTANTS.ROW_KEY.getValue)
+  val rowKeyConverter: (InternalRow, Int) => Array[Byte] = HBaseSparkDataUtils.interRowToHBaseFunc(dataSchema(rowKeyIdx).dataType)
 
-  val schemaMap: Map[String, (Array[Byte], Array[Byte], Option[Int], (InternalRow, Int) => Array[Byte])] = dataSchema.map { field =>
+  val schemaMap: Map[String, (Array[Byte], Array[Byte], Int, (InternalRow, Int) => Array[Byte])] = filteredDataSchema.map { field =>
     val separateName = HBaseSparkFormatUtils.splitColumnAndQualifierName(field.name)
     field.name -> (
       Bytes.toBytes(separateName.familyName),
       Bytes.toBytes(separateName.qualifierName),
-      dataSchema.getFieldIndex(field.name),
-      HBaseSparkDataUtils.genInternalRowToHBaseConverter(field.dataType))
+      dataSchema.getFieldIndex(field.name).get,
+      HBaseSparkDataUtils.interRowToHBaseFunc(field.dataType))
   }.toMap
 
 
@@ -212,15 +223,19 @@ class HBaseOutputWriter(context: TaskAttemptContext, dataSchema: StructType) ext
     if (row.numFields > 0) {
       val rowKey = rowKeyConverter(row, rowKeyIdx)
       val put = new Put(rowKey)
-      dataSchema.foreach { field =>
+      filteredDataSchema.foreach { field =>
+        val cellBuilder = put.getCellBuilder(CellBuilderType.SHALLOW_COPY)
         val (family, qualifier, idx, converter) = schemaMap(field.name)
-        put.addColumn(family, qualifier, converter(row, idx.get))
+        cellBuilder.setFamily(family)
+        cellBuilder.setQualifier(qualifier)
+        cellBuilder.setValue(converter(row, idx))
+        val cell = cellBuilder.build()
+        hfileRecordWriter.write(null,cell)
       }
-      hFileWriter.write(null, put.getCellBuilder(CellBuilderType.SHALLOW_COPY).build())
     }
   }
 
-  override def close(): Unit = hFileWriter.close(context)
+  override def close(): Unit = hfileRecordWriter.close(context)
 
   override def path(): String = {
     val name = context.getConfiguration.get("mapreduce.output.fileoutputformat.outputdir")

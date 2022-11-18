@@ -2,10 +2,11 @@ package org.apache.spark.sql.hbase.utils
 
 import org.apache.hadoop.hbase.client.{RegionInfo, Result}
 import org.apache.hadoop.hbase.util.Bytes
+import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
 import org.apache.spark.sql.hbase.types.RegionInfoUDT
-import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DoubleType, FloatType, IntegerType, LongType, ObjectType, ShortType, StringType, TimestampType, UserDefinedType}
+import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DoubleType, FloatType, IntegerType, LongType, ObjectType, ShortType, StringType, StructType, TimestampType, UserDefinedType}
 import org.apache.spark.unsafe.types.UTF8String
 
 object HBaseSparkDataUtils extends Serializable {
@@ -21,7 +22,7 @@ object HBaseSparkDataUtils extends Serializable {
    * @param dataType 数据类型
    * @return
    */
-  def genInternalRowToHBaseConverter(dataType: DataType): (InternalRow, Int) => Array[Byte] = dataType match {
+  def interRowToHBaseFunc(dataType: DataType): (InternalRow, Int) => Array[Byte] = dataType match {
     case ByteType =>
       (internalRow, i) => Array(internalRow.getByte(i))
 
@@ -50,13 +51,50 @@ object HBaseSparkDataUtils extends Serializable {
       (internalRow, i) => internalRow.getBinary(i)
   }
 
+  def rowToHBaseFunc(dataType: DataType):(Row,Int)=>Array[Byte] = dataType match {
+    case ByteType =>
+      (row, i) => Array(row.getByte(i))
+
+    case StringType =>
+      (row, i) => Bytes.toBytes(row.getString(i))
+
+    //convert to milli seconds
+    case TimestampType =>
+      (row, i) => Bytes.toBytes(row.getLong(i) / 1000)
+    case LongType =>
+      (row, i) => Bytes.toBytes(row.getLong(i))
+    case IntegerType =>
+      (row, i) => Bytes.toBytes(row.getInt(i))
+    case ShortType =>
+      (row, i) => Bytes.toBytes(row.getShort(i))
+
+    case BooleanType =>
+      (row, i) => Bytes.toBytes(row.getBoolean(i))
+
+    case DoubleType =>
+      (row, i) => Bytes.toBytes(row.getDouble(i))
+    case FloatType =>
+      (row, i) => Bytes.toBytes(row.getFloat(i))
+
+    case _ =>
+      (row, i) => Bytes.toBytes(row.getString(i))
+  }
+
+  def genInternalRowConverters(structType: StructType): Seq[(InternalRow, Int) => Array[Byte]] ={
+    structType.map(_.dataType).map(interRowToHBaseFunc)
+  }
+
+  def genRowConverters(structType: StructType): Seq[(Row, Int) => Array[Byte]] ={
+    structType.map(_.dataType).map(rowToHBaseFunc)
+  }
+
   /**
    * generate a data converter that could transform HBase Bytes Value to Spark InternalRow
    *
    * @param dataType 数据类型
    * @return
    */
-  def genHBaseFieldConverter(dataType: DataType): (InternalRow, Int, Array[Byte]) => Unit = dataType match {
+  def genHBaseToInternalRowConverter(dataType: DataType): (InternalRow, Int, Array[Byte]) => Unit = dataType match {
     case ByteType =>
       (internalRow, i, v) => internalRow.update(i, v.head)
 
@@ -88,7 +126,7 @@ object HBaseSparkDataUtils extends Serializable {
       (internalRow, i, v) => internalRow.update(i, v)
   }
 
-  def genHBaseFieldConverterWithOffset(dataType: DataType): (InternalRow, Int, Array[Byte], Int, Int) => Unit = dataType match {
+  def genHBaseToInternalRowConverterWithOffset(dataType: DataType): (InternalRow, Int, Array[Byte], Int, Int) => Unit = dataType match {
     case ByteType =>
       (internalRow, i, v, offset, len) => internalRow.update(i, v(offset))
 
@@ -116,6 +154,7 @@ object HBaseSparkDataUtils extends Serializable {
     case _ =>
       (internalRow, i, v, offset, len) => internalRow.update(i, Bytes.copy(v, offset, len))
   }
+
 
   /**
    * 对HBase中qualifier的数据进行转换

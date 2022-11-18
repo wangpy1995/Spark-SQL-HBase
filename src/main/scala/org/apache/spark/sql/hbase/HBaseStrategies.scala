@@ -1,25 +1,25 @@
 package org.apache.spark.sql.hbase
 
-import java.util.Locale
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql._
-import org.apache.spark.sql.catalyst.catalog.{CatalogTable, SessionCatalog, UnresolvedCatalogRelation}
+import org.apache.spark.sql.catalyst.catalog.{CatalogTable, UnresolvedCatalogRelation}
 import org.apache.spark.sql.catalyst.expressions.{And, Attribute, AttributeMap, AttributeReference, AttributeSet, Expression, GenericInternalRow, NamedExpression}
 import org.apache.spark.sql.catalyst.planning.PhysicalOperation
-import org.apache.spark.sql.catalyst.plans.logical.{InsertIntoStatement, LogicalPlan, SubqueryAlias}
+import org.apache.spark.sql.catalyst.plans.logical.{InsertIntoStatement, LogicalPlan}
 import org.apache.spark.sql.catalyst.rules.Rule
-import org.apache.spark.sql.catalyst.{CatalystTypeConverters, InternalRow, QualifiedTableName, expressions}
+import org.apache.spark.sql.catalyst.{CatalystTypeConverters, InternalRow, expressions}
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.command.{CreateTableCommand, ExecutedCommandExec}
 import org.apache.spark.sql.execution.datasources.DataSourceStrategy.selectFilters
 import org.apache.spark.sql.execution.datasources.v2.PushedDownOperators
-import org.apache.spark.sql.execution.datasources.{CreateTable, DataSource, DataSourceUtils, InsertIntoDataSourceCommand, InsertIntoHadoopFsRelationCommand, LogicalRelation}
+import org.apache.spark.sql.execution.datasources.{CreateTable, LogicalRelation}
 import org.apache.spark.sql.hbase.catalog.HBaseTableRelation
-import org.apache.spark.sql.hbase.execution.{CreateHBaseTableAsSelectCommand, HBaseFileFormat, HBaseTableScanExec, InsertIntoHBaseTable}
+import org.apache.spark.sql.hbase.execution.{CreateHBaseTableAsSelectCommand, HBaseTableFormat, HBaseTableScanExec, InsertIntoHBaseTable}
 import org.apache.spark.sql.sources.{Filter, PrunedFilteredScan}
 import org.apache.spark.sql.types.{DataType, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
+import java.util.Locale
 import scala.collection.mutable.ArrayBuffer
 
 /**
@@ -252,7 +252,8 @@ object HBaseAnalysis extends Rule[LogicalPlan] {
   }
 
   def isHBaseTable(table: CatalogTable): Boolean = {
-    table.provider.isDefined && table.provider.get.toLowerCase(Locale.ROOT) == "hbase"
+    //TODO 特殊处理hbase表
+    table.provider.isDefined && table.provider.get.toLowerCase(Locale.ROOT).contains("hbase")
   }
 }
 
@@ -270,5 +271,8 @@ class ResolveHBaseTable(sparkSession: SparkSession) extends Rule[LogicalPlan] {
     case UnresolvedCatalogRelation(tableMeta, options, false)
       if HBaseAnalysis.isHBaseTable(tableMeta) =>
       readHBaseTable(tableMeta, options)
+    case i@InsertIntoStatement(UnresolvedCatalogRelation(tableMeta, options, false),
+    _, _, _, _, _) if HBaseAnalysis.isHBaseTable(tableMeta) =>
+      i.copy(table = readHBaseTable(tableMeta, options))
   }
 }

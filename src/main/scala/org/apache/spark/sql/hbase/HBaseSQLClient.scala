@@ -1,14 +1,12 @@
 package org.apache.spark.sql.hbase
 
-import java.io.File
 import jline.console.ConsoleReader
 import jline.console.history.FileHistory
 import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.hbase.HBaseConfiguration
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.types.UDTRegistration
 
+import java.io.File
 import java.util.Properties
 
 /**

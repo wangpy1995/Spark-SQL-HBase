@@ -63,7 +63,7 @@ case class HBaseTableScanExec(
           (Bytes.toBytes(separateName.familyName),
             Bytes.toBytes(separateName.qualifierName),
             idx,
-            HBaseSparkDataUtils.genHBaseFieldConverter(field.dataType))
+            HBaseSparkDataUtils.genHBaseToInternalRowConverter(field.dataType))
         }
         proj.initialize(index)
         val size = schema.length

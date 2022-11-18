@@ -1,6 +1,8 @@
 pw:test:
   row:
     key: string
+  generator:
+    name: org.apache.spark.sql.hbase.execution.DefaultRowKeyGenerator
   A:
     A_00: string
     A_01: string
@@ -24,9 +26,19 @@ pw:test:
     B_08: string
     B_09: string
 
+pw:test_insert:
+  row:
+    key: string
+  generator:
+    name: org.apache.spark.sql.hbase.execution.DefaultRowKeyGenerator
+  T:
+    T_00: string
+
 hbase:meta:
   row:
     key: string
+  generator:
+    name: org.apache.spark.sql.hbase.execution.DefaultRowKeyGenerator
   ns:
     d: string
   table:
@@ -42,5 +54,7 @@ hbase:meta:
 hbase:namespace:
   row:
     key: string
+  generator:
+    name: org.apache.spark.sql.hbase.execution.DefaultRowKeyGenerator
   info:
     d: string

@@ -1,7 +1,7 @@
 package org.apache.spark.sql.hbase
 
 import org.apache.hadoop.conf.Configuration
-import org.apache.spark.sql.catalyst.TableIdentifier
+import org.apache.spark.sql.catalyst.{CatalystIdentifier, TableIdentifier}
 import org.apache.spark.sql.catalyst.analysis.{FunctionRegistry, GetViewColumnByNameAndOrdinal, NoSuchTableException, TableFunctionRegistry}
 import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.expressions.{Alias, UpCast}
@@ -12,8 +12,8 @@ import org.apache.spark.sql.internal.SQLConf
 import java.util.Locale
 
 /**
-  * Created by wpy on 17-5-17.
-  */
+ * Created by wpy on 17-5-17.
+ */
 private[sql] class HBaseSessionCatalog(
                                         externalCatalogBuilder: () => ExternalCatalog,
                                         globalTempViewManagerBuilder: () => GlobalTempViewManager,
@@ -38,10 +38,26 @@ private[sql] class HBaseSessionCatalog(
     super.refreshTable(name)
   }
 
+  private def getDatabase(ident: CatalystIdentifier): Option[String] = {
+    Some(format(ident.database.getOrElse(getCurrentDatabase)))
+  }
+
+  private def getCatalog(ident: TableIdentifier)={
+    if (conf.getConf(SQLConf.LEGACY_NON_IDENTIFIER_OUTPUT_CATALOG_NAME)) {
+      ident.catalog
+    } else {
+      Some(format(ident.catalog.getOrElse("hbase_catalog")))
+    }
+  }
+  override def qualifyIdentifier(ident: TableIdentifier): TableIdentifier = {
+    TableIdentifier(
+      table = format(ident.table),
+      database = getDatabase(ident),
+      catalog = getCatalog(ident))
+  }
+
   /**
    * 通过table名返回对应table的logical plan
-   * @param name
-   * @return
    */
   override def lookupRelation(name: TableIdentifier): LogicalPlan = {
     synchronized {
@@ -73,7 +89,7 @@ private[sql] class HBaseSessionCatalog(
               metadata.dataSchema.asNullable.toAttributes,
               metadata.partitionSchema.asNullable.toAttributes)
             SubqueryAlias(table, tablePlan)
-          } else{
+          } else {
             // 数据源不是HBase, 生成其他外部数据源的Table
             getRelation(metadata)
           }

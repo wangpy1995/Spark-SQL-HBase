@@ -52,11 +52,18 @@ class TestSql extends AnyFunSuite {
   test("select * ") {
     hs.sql("select * from hbase.meta").show()
     hs.sql(s"select * from $TEST_NAMESPACE.$TEST_TABLE_NAME").show()
+    hs.sql("select * from pw.test_insert").show()
   }
 
   test("select one col"){
     val regionInfo = hs.sql("select `info:regioninfo` from hbase.meta").cache()
     regionInfo.show()
     println(regionInfo.collect().mkString("Array(", ", ", ")"))
+  }
+
+  test("insert one col"){
+    hs.sql("use pw").show()
+    hs.sql("insert into test_insert  values('0000', 'TestSql')").show()
+    hs.sql("select * from test_insert").show()
   }
 }

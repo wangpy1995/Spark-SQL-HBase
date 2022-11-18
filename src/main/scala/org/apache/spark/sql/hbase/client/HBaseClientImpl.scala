@@ -20,7 +20,7 @@ import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.hbase.SparkHBaseConstants.TABLE_CONSTANTS
-import org.apache.spark.sql.hbase.execution.{HBaseFileFormat, HBaseSqlParser}
+import org.apache.spark.sql.hbase.execution.{HBaseFileFormat, HBaseSqlParser, HBaseTableFormat}
 import org.apache.spark.sql.hbase.utils.HBaseSparkFormatUtils
 import org.apache.spark.sql.types.{StructField, StructType}
 import org.apache.spark.util.{CircularBuffer, SerializableConfiguration}
@@ -241,7 +241,10 @@ class HBaseClientImpl(
 
       //TODO need reality schemas
       val schemaMap = getSchemaProp
+      //获取并remove该表的rowKey生成器
+      val rowKeyGeneratorName = schemaMap.get(name).remove("generator").get("name")
       val schema = getSchema(schemaMap, name)
+
       //TODO should add more properties in future
       val props = {
         val regions = admin.getRegions(TableName.valueOf(name))
@@ -269,7 +272,8 @@ class HBaseClientImpl(
           "encoding" -> encoding,
           "split" -> splitKeys,
           "bloom" -> bloom,
-          "zip" -> zip)
+          "zip" -> zip,
+          "generator" -> rowKeyGeneratorName)
       }
       val path = new Path(conf.get("hbase.rootdir") + s"/data/$dbName/$tableName")
       //TODO should add properties like {{cf:{Q1,Q2,...,Qn}}}, {splitKey:{S1,S2,...,Sn}}, {{DataEncoding:{prefix,diff,...}}}, {BloomType:{BloomType}}
@@ -288,7 +292,8 @@ class HBaseClientImpl(
           compressed = false,
           properties = Map.empty),
         schema = schema,
-        provider = Some("hbase"),
+        //TODO 可以用来关联HBase外部数据源
+        provider = Some(classOf[HBaseTableFormat].getCanonicalName),
         properties = props,
         stats = Some(CatalogStatistics(FileSystem.get(conf).getContentSummary(path).getLength)))
     }

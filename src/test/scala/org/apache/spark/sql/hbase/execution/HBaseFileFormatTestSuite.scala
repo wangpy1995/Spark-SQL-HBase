@@ -50,7 +50,7 @@ class HBaseFileFormatTestSuite extends AnyFunSuite {
          |    A_07 string,
          |    A_08 string,
          |    A_09 string
-         |) USING ${classOf[HBaseFileFormat].getTypeName}
+         |) USING ${classOf[HBaseFileFormat].getCanonicalName}
          |OPTIONS(
          |path '$hfilePath')
          |""".stripMargin).show()
