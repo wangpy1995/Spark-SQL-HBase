@@ -4,31 +4,55 @@
  
  注：项目中使用到的spark、hbase均为2021-09-07 13:00:00从github中clone并编译的版本，版本不同时部分接口略有出入可能导致程序无法运行
 
-1. HBase的`Namespace`与SQL中的`Database`对应, 在未制定`Database`的情况下, 可以使用`namespace.table`进行表查询, 例如`select * from namespace.table`
-2. 目前列名部分暂定为`cf_qualifier`形式, `ColumnFamily`与`Qualifier`之间以`_`分隔, 因此想要查询HBase表`A`中的列`cf:1`时，需要输入查询语句应为：`select cf_1 from A`
-3. HBase表以及Namespace的操作默认通过`org.apache.spark.sql.hbase.client.HBaseClientImpl`实现，可修改spark_hbase.properties中`spark.hbase.client.impl`值修改为其他自定义实现方式
+1. HBase的`Namespace`与SQL中的`Database`对应, 
+在未指定`Database`的情况下, 可以使用`namespace.table`进行表查询, 
+例如`select * from namespace.table`
+2. 列名部分采用了HBase的`cf:qualifier`形式, 
+`ColumnFamily`与`Qualifier`之间以`:`分隔, 
+因此想要查询HBase表`A`中的列`cf:1`时，需要在`cf:1`的首尾添加反引号\`cf:1\`
+3. HBase表以及Namespace的操作默认通过`org.apache.spark.sql.hbase.client.HBaseClientImpl`实现,
+其中包含了从文件中读取hbase schema信息的功能,可以根据自身需求
+修改spark_hbase.properties中`spark.hbase.client.impl`值
+4. yaml文件中为每个表增加了一个generator选项,
+generator的值需要继承trait `org.apache.spark.hbase.execution.RowKeyGenerator`,
+且必须有一个无参数的构造方法,通过实现`genRowKey`方法可以为插入的数据生成RowKey
  
-由于spark sql不同大版本实现差异过大，因此该项目只支持spark2.x及以上版本
+项目的spark由2022.11.15于github上的master分支手动编译得到,
+理论上来讲能兼容Spark3.x版本
 
 
 # GetStarted
 1. 替换resource目录下hbase-site.xml，修改spark_hbase.properties的各属性值
-2. 依次运行项目下test/scala中的 `org.apache.spark.sql.hbase.client.TestHBase`的`createUserNamespaceAndTable()`, 
+2. 根据需要,运行项目下test/scala中的 `org.apache.spark.sql.hbase.client.TestHBase`的`createUserNamespaceAndTable()`, 
 `insertData()`以及
-`scan()`方法导入数据
-3. 执行`org.apache.spark.sql.hbase.HBaseSQLClient`的main方法启动程序，输入sql语句检查程序是否正常运行
+`scan()`方法新建表以及生成数据
+3. 执行`org.apache.spark.sql.hbase.HBaseSQLClient`的main方法启动程序,
+输入sql语句检查程序是否正常运行
 
-## 程序部分截图如下：
-### 1. show databases;
-![Image text](https://github.com/wangpy1995/Spark-SQL-HBase/blob/master/src/main/resources/show/show_databases.png)
-### 2. show tables;
-![Image text](https://github.com/wangpy1995/Spark-SQL-HBase/blob/master/src/main/resources/show/show_tables.png)
-### 3. select * from meta;
-![Image text](https://github.com/wangpy1995/Spark-SQL-HBase/blob/master/src/main/resources/show/select_from_meta.png)
-### 4. select * from wpy1.test where cf1_cf1_0 like "%24%";
-![Image text](https://github.com/wangpy1995/Spark-SQL-HBase/blob/master/src/main/resources/show/select_from_test_like.png)
-### 5. select cf2_cf2_0 from wpy1.test where cf1_cf1_0 like "%24%";
-![Image text](https://github.com/wangpy1995/Spark-SQL-HBase/blob/master/src/main/resources/show/select_one_col_from_test_like.png)
+# 部分截图如下(字太小看不清楚可以手动放大查看)
+## 程序查询语句：
+show databases;
 
+show tables;
+
+select * from hbase.meta;
+
+select * from pw.test where \`A:A_00\` like "%24%";
+
+![Image text](https://github.com/wangpy1995/Spark-SQL-HBase/blob/master/src/main/resources/show/SELECT_QUERY.png)
+## 插入语句截图如下(默认的RowKeyGenerator的rowKey规则是每次插入增加1,因此values中的'0000'不生效符合预期):
+use pw;
+
+insert into test_insert  values('0000', 'TestSql');
+
+select * from test_insert;
+
+insert into test_insert  values('0000', 'TestSql');
+
+insert into test_insert  values('0000', 'TestSql');
+
+select * from test_insert;
+
+![Image text](https://github.com/wangpy1995/Spark-SQL-HBase/blob/master/src/main/resources/show/INSERT_QUERY.png)
 
 ####由于环境限制，程序还有许多部分未来得及测试，诸多不完善之处，还请大家多多提出宝贵意见
