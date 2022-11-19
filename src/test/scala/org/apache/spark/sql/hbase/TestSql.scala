@@ -53,6 +53,8 @@ class TestSql extends AnyFunSuite {
     hs.sql("select * from hbase.meta").show()
     hs.sql(s"select * from $TEST_NAMESPACE.$TEST_TABLE_NAME").show()
     hs.sql("select * from pw.test_insert").show()
+    //table not found
+    hs.sql("select * from hbase.namespace").show()
   }
 
   test("select one col"){

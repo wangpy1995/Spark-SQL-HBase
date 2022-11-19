@@ -18,15 +18,13 @@ import org.apache.spark.sql.catalyst.analysis.NoSuchDatabaseException
 import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
 import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.expressions.Expression
-import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.hbase.SparkHBaseConstants.TABLE_CONSTANTS
-import org.apache.spark.sql.hbase.execution.{HBaseFileFormat, HBaseSqlParser, HBaseTableFormat}
-import org.apache.spark.sql.hbase.utils.HBaseSparkFormatUtils
+import org.apache.spark.sql.hbase.execution.{HBaseSqlParser, HBaseTableFormat}
 import org.apache.spark.sql.types.{StructField, StructType}
 import org.apache.spark.util.{CircularBuffer, SerializableConfiguration}
 import org.yaml.snakeyaml.Yaml
 
-import java.io.{FileInputStream, ObjectInputStream, PrintStream}
+import java.io.{FileInputStream, FileWriter, ObjectInputStream, PrintStream}
 import java.net.URI
 import java.{util => ju}
 import scala.annotation.meta.param
@@ -46,6 +44,7 @@ class HBaseClientImpl(
     with Logging {
 
   private val schemaPath = extraConfig("schema.file.url")
+  private lazy val yaml = new Yaml()
 
   // Circular buffer to hold what hbase prints to STDOUT and ERR.  Only printed when failures occur.
   @transient private var outputBuffer = new CircularBuffer()
@@ -115,19 +114,36 @@ class HBaseClientImpl(
    * @return
    */
   private def getSchemaProp = {
-    // Map[ table, Map[ family, Map[qua_name, type ] ]
-    val yaml = new Yaml()
+    // Map[tableName, Map[colum:qua_name, type]
     val inputStream = new FileInputStream(schemaPath)
-    val y = yaml.load[ju.Map[String, ju.Map[String, ju.Map[String, String]]]](inputStream)
+    val y = yaml.load[ju.Map[String, ju.Map[String, String]]](inputStream)
     inputStream.close()
     y
   }
 
-  private def getColumnNames(schemaMap: ju.Map[String, ju.Map[String, ju.Map[String, String]]], tableName: String) = {
-    "{+\n" + schemaMap.get(tableName).asScala.map { cf =>
-      cf._1 + "-> (" + cf._2.asScala.keys.mkString(", ") +
-        ")"
-    }.mkString(";\n") + "\n}"
+  private def saveSchemaProp(table: CatalogTable): Unit = {
+    // Map[tableName, Map[colum:qua_name, type]
+    val schemaMap = new ju.LinkedHashMap[String, ju.Map[String, String]]()
+    val tableMap: ju.Map[String, String] = new ju.LinkedHashMap()
+    //row_key
+    val keyType = table.schema(TABLE_CONSTANTS.ROW_KEY.getValue).dataType.typeName
+    tableMap.put(TABLE_CONSTANTS.ROW_KEY.getValue, keyType)
+    //generator
+    val generator = table.properties("generator")
+    tableMap.put("generator", generator)
+    //columns
+    table.schema.filter(_.name != TABLE_CONSTANTS.ROW_KEY.getValue).foreach { field =>
+      tableMap.put(field.name, field.dataType.typeName)
+    }
+    schemaMap.put(table.database + ":" + table.qualifiedName, tableMap)
+    //追加到文件末尾
+    val writer = new FileWriter(schemaPath, true)
+    yaml.dump(schemaMap, writer)
+    writer.close()
+  }
+
+  private def getColumnQualifiers(schemaMap: ju.Map[String, ju.Map[String, String]], tableName: String) = {
+    yaml.dump(schemaMap.get(tableName))
   }
 
   /**
@@ -137,19 +153,14 @@ class HBaseClientImpl(
    * @param tableName 表名
    * @return
    */
-  private def getSchema(schemaMap: ju.Map[String, ju.Map[String, ju.Map[String, String]]], tableName: String) = StructType {
+  private def getSchema(schemaMap: ju.Map[String, ju.Map[String, String]], tableName: String) = StructType {
     val tableSchema = schemaMap.get(tableName)
-    val rowKeyField = StructField(TABLE_CONSTANTS.ROW_KEY.getValue, CatalystSqlParser.parseDataType(tableSchema.remove("row").get("key")))
-    val columnQualifierFields = tableSchema.asScala.flatMap { case (familyName, qualifier) =>
-      qualifier.asScala.map { case (qualifierName, dataType) =>
-        //family和qualifier字段的名字用“:”组合
-        StructField(
-          HBaseSparkFormatUtils.combineColumnAndQualifierName(familyName, qualifierName),
-          HBaseSqlParser.parseDataType(dataType))
-      }
+    tableSchema.asScala.map { case (col_name, dataType) =>
+      //family和qualifier字段的名字用“:”组合
+      StructField(col_name, HBaseSqlParser.parseDataType(dataType))
     }.toList
-    rowKeyField :: columnQualifierFields
   }
+
 
   def connection: Connection = {
     if (clientLoader != null) {
@@ -235,38 +246,35 @@ class HBaseClientImpl(
 
   /** Returns the metadata for the specified table or None if it doesn't exist. */
   override def getTableOption(dbName: String, tableName: String): Option[CatalogTable] = {
-    val name = s"$dbName:$tableName"
+    val table = s"$dbName:$tableName"
     logDebug(s"Looking up $dbName:$tableName")
-    Option(admin.getDescriptor(TableName.valueOf(name))).map { t =>
+    Option(admin.getDescriptor(TableName.valueOf(table))).map { t =>
 
       //TODO need reality schemas
       val schemaMap = getSchemaProp
       //获取并remove该表的rowKey生成器
-      val rowKeyGeneratorName = schemaMap.get(name).remove("generator").get("name")
-      val schema = getSchema(schemaMap, name)
+      val rowKeyGeneratorName = schemaMap.get(table).remove("generator")
+      val schema = getSchema(schemaMap, table)
 
       //TODO should add more properties in future
       val props = {
-        val regions = admin.getRegions(TableName.valueOf(name))
-        val tableDesc = admin.getDescriptor(TableName.valueOf(name))
-        /*
-        {cf1->{q1,q2,...,}}
-        {cf2->{q1,q2,...,}}
-         */
+        val regions = admin.getRegions(TableName.valueOf(table))
+        val tableDesc = admin.getDescriptor(TableName.valueOf(table))
         val cols = tableDesc.getColumnFamilies
-        //{CF1: (Q1, Q2, Q3, ... ,Qn)}; {CF2: (Q1, Q2, Q3, ... ,Qn)}; ... ;{CF3: (Q1, Q2, Q3, ... ,Qn)}
-        val qualifiers = getColumnNames(schemaMap, name)
-        //          .map(cf=>s"{${cf._1}:(${cf._2.mkString(",")})}").mkString(";")
-        val encoding = cols.map(family => family.getNameAsString -> Bytes.toString(family.getDataBlockEncoding.getNameInBytes)).mkString(";")
+        /**Map{
+            'CF1:Q1': dataType1,
+                     ....... ,
+            'CF1:Qn': dataTypeN}
+        **/
+        val qualifiers = getColumnQualifiers(schemaMap, table)
+        val encoding = yaml.dump(cols.map(family => family.getNameAsString -> Bytes.toString(family.getDataBlockEncoding.getNameInBytes)).toMap.asJava)
         //"K1, K2, K3, ... ,Kn"
-        val splitKeys = regions.iterator().asScala.map(region => Bytes.toString(region.getEndKey)).mkString(",")
-        val bloom = cols.map(family => family.getNameAsString + ":" + family.getBloomFilterType.name()).mkString(";")
-        val zip = cols.map(family => family.getNameAsString + ":" + family.getCompressionType.getName).mkString(";")
+        val splitKeys = yaml.dump(regions.iterator().asScala.map(region => Bytes.toString(region.getEndKey)).asJava)
+        val bloom = yaml.dump(cols.map(family => family.getNameAsString->family.getBloomFilterType.name()).toMap.asJava)
+        val zip = yaml.dump(cols.map(family => family.getNameAsString -> family.getCompressionType.getName).toMap.asJava)
         val columns = cols.map(_.getNameAsString).mkString(",")
-        val table = s"$tableName"
-        val db = s"$dbName"
-        Map("db" -> db,
-          "table" -> table,
+        Map("db" ->  s"$dbName",
+          "table" -> s"$tableName",
           "qualifiers" -> qualifiers,
           "columns" -> columns,
           "encoding" -> encoding,
@@ -362,6 +370,8 @@ class HBaseClientImpl(
     val split = splitKeys.split(",").filter(_.nonEmpty).map(Bytes.toBytes)
     //create table
     admin.createTable(tableDesc.build(), split)
+    //将schema信息写入到文件中
+    saveSchemaProp(table)
   }
 
   /** Drop the specified table. */
