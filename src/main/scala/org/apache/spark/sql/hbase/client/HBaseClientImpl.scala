@@ -19,7 +19,8 @@ import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
 import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.hbase.SparkHBaseConstants.TABLE_CONSTANTS
-import org.apache.spark.sql.hbase.execution.{HBaseSqlParser, HBaseTableFormat}
+import org.apache.spark.sql.hbase.execution.{DefaultRowKeyGenerator, HBaseSqlParser, HBaseTableFormat}
+import org.apache.spark.sql.hbase.utils.HBaseSparkFormatUtils
 import org.apache.spark.sql.types.{StructField, StructType}
 import org.apache.spark.util.{CircularBuffer, SerializableConfiguration}
 import org.yaml.snakeyaml.Yaml
@@ -121,23 +122,31 @@ class HBaseClientImpl(
     y
   }
 
-  private def saveSchemaProp(table: CatalogTable): Unit = {
+  private def addTableSchema(table: CatalogTable): Unit = synchronized{
     // Map[tableName, Map[colum:qua_name, type]
-    val schemaMap = new ju.LinkedHashMap[String, ju.Map[String, String]]()
+    val schemaMap = getSchemaProp
     val tableMap: ju.Map[String, String] = new ju.LinkedHashMap()
     //row_key
     val keyType = table.schema(TABLE_CONSTANTS.ROW_KEY.getValue).dataType.typeName
     tableMap.put(TABLE_CONSTANTS.ROW_KEY.getValue, keyType)
     //generator
-    val generator = table.properties("generator")
+    val generator = table.properties.getOrElse("generator", classOf[DefaultRowKeyGenerator].getCanonicalName)
     tableMap.put("generator", generator)
     //columns
     table.schema.filter(_.name != TABLE_CONSTANTS.ROW_KEY.getValue).foreach { field =>
       tableMap.put(field.name, field.dataType.typeName)
     }
-    schemaMap.put(table.database + ":" + table.qualifiedName, tableMap)
-    //追加到文件末尾
-    val writer = new FileWriter(schemaPath, true)
+    //增加新表的Schema
+    schemaMap.put(table.database + ":" + table.identifier.table, tableMap)
+    val writer = new FileWriter(schemaPath, false)
+    yaml.dump(schemaMap, writer)
+    writer.close()
+  }
+
+  private def dropTableSchema(dbName:String, tableName: String):Unit=synchronized{
+    val schemaMap = getSchemaProp
+    schemaMap.remove(dbName + ":" + tableName)
+    val writer = new FileWriter(schemaPath, false)
     yaml.dump(schemaMap, writer)
     writer.close()
   }
@@ -239,11 +248,6 @@ class HBaseClientImpl(
     admin.listNamespaceDescriptors().map(_.getName).filter(_.matches(pattern))
   }
 
-  /** Return whether a table/view with the specified name exists. */
-  override def tableExists(dbName: String, tableName: String): Boolean = {
-    admin.tableExists(TableName.valueOf(s"$dbName:$tableName"))
-  }
-
   /** Returns the metadata for the specified table or None if it doesn't exist. */
   override def getTableOption(dbName: String, tableName: String): Option[CatalogTable] = {
     val table = s"$dbName:$tableName"
@@ -261,19 +265,19 @@ class HBaseClientImpl(
         val regions = admin.getRegions(TableName.valueOf(table))
         val tableDesc = admin.getDescriptor(TableName.valueOf(table))
         val cols = tableDesc.getColumnFamilies
-        /**Map{
-            'CF1:Q1': dataType1,
-                     ....... ,
-            'CF1:Qn': dataTypeN}
-        **/
+        /** Map{
+         * 'CF1:Q1': dataType1,
+         * ....... ,
+         * 'CF1:Qn': dataTypeN}
+         * */
         val qualifiers = getColumnQualifiers(schemaMap, table)
         val encoding = yaml.dump(cols.map(family => family.getNameAsString -> Bytes.toString(family.getDataBlockEncoding.getNameInBytes)).toMap.asJava)
         //"K1, K2, K3, ... ,Kn"
         val splitKeys = yaml.dump(regions.iterator().asScala.map(region => Bytes.toString(region.getEndKey)).asJava)
-        val bloom = yaml.dump(cols.map(family => family.getNameAsString->family.getBloomFilterType.name()).toMap.asJava)
+        val bloom = yaml.dump(cols.map(family => family.getNameAsString -> family.getBloomFilterType.name()).toMap.asJava)
         val zip = yaml.dump(cols.map(family => family.getNameAsString -> family.getCompressionType.getName).toMap.asJava)
         val columns = cols.map(_.getNameAsString).mkString(",")
-        Map("db" ->  s"$dbName",
+        Map("db" -> s"$dbName",
           "table" -> s"$tableName",
           "qualifiers" -> qualifiers,
           "columns" -> columns,
@@ -307,71 +311,59 @@ class HBaseClientImpl(
     }
   }
 
+  /** Return whether a table/view with the specified name exists. */
+  override def tableExists(dbName: String, tableName: String): Boolean = {
+    admin.tableExists(TableName.valueOf(s"$dbName:$tableName"))
+  }
+
   /** Creates a table with the given metadata. */
   override def createTable(table: CatalogTable, ignoreIfExists: Boolean): Unit = {
-    def propStringToMap(propStr: String)(f: String => Map[String, String]): Map[String, String] = {
-      f(propStr)
-    }
-
-    def toMapFunc: String => Map[String, String] = { a =>
-      a.replaceAll("\t", "").replaceAll(" ", "").split(";").map { b =>
-        val r = b.split(":")
-        Map(r(0) -> r(1))
-      }.reduce(_ ++ _)
-    }
-
-    val dbName = table.identifier.database.get
-    // dbName对应hbase的namespace
-    if (!databaseExists(dbName)) {
-      admin.createNamespace(NamespaceDescriptor.create(dbName).build())
-    }
-    val props = table.properties
-    val tableDesc = TableDescriptorBuilder.newBuilder(TableName.valueOf(table.identifier.table))
-    //TODO may be used in "INSERT EXPRESSION"
-    // "qualifiers" "{CF1:(Q1, Q2, Q3, ... ,Qn)}; {CF2:(Q1, Q2, Q3, ... ,Qn)}; ... ;{CFn:(Q1, Q2, Q3, ... ,Qn)}"
-    //    val cols = props("qualifiers").replaceAll("\t", "").replaceAll(" ", "")
-
-    //"column" "CF1, CF2, CF3, ...,CFn"
-    val cols = props("column").replaceAll("\t", "").replaceAll(" ", "")
-    //"encoding" "CF1:DataBlockEncoding; CF2:DataBlockEncoding; ... ;CFn:DataBlockEncoding"
-    val encoding = propStringToMap(props("encoding"))(toMapFunc)
-    //"split" "K1, K2, K3, ... ,Kn"
-    val splitKeys = props("split").replaceAll("\t", "").replaceAll(" ", "")
-    //"bloom" "CF1: type; CF2: type; CF3: type; ...;CFn: type"
-    val bloomType = propStringToMap(props("bloom"))(toMapFunc)
-    //"zip" "{CF1, algorithm}; {CF2, algorithm}; {CF3, algorithm}; ... ;{CFn, algorithm}"
-    val zip = propStringToMap(props("zip"))(toMapFunc)
-
-    //start get properties & create new table
-
-    //get column_family properties
-    val pattern = "\\{([0-9a-zA-Z]*):\\((([0-9a-zA-Z]*([,])?)*)\\)}".r
-
-    //unused
-    /*val colQualifier = cols.split(";").map{
-      case pattern(cf, qualifiers, _*) => {
-        val qualifier = qualifiers.split(",").map(Bytes.toBytes)
-        qualifier.map(q=>Map(cf->q)).reduce(_++_)
+    val exists = tableExists(table.database, table.identifier.table)
+    if (exists && ignoreIfExists) {
+      logInfo(s"table ${table.database}:${table.qualifiedName} is existed, create table is ignored")
+    } else {
+      def propStringToMap(propStr: String)(f: String => Map[String, String]): Map[String, String] = {
+        f(propStr)
       }
-    }*/
 
-    cols.split(";").foreach {
-      case pattern(cf, _, _*) =>
-        val bloom = bloomType(cf)
-        val compression = zip(cf)
-        val en = encoding(cf)
-        val columnFamily = ColumnFamilyDescriptorBuilder.newBuilder(Bytes.toBytes(cf))
+      def toMapFunc: String => Map[String, String] = { a =>
+        a.replaceAll("\t", "").replaceAll(" ", "").split(";").map { b =>
+          val r = b.split(":")
+          Map(r(0) -> r(1))
+        }.reduce(_ ++ _)
+      }
+
+      val dbName = table.identifier.database.get
+      // dbName对应hbase的namespace
+      if (!databaseExists(dbName)) {
+        admin.createNamespace(NamespaceDescriptor.create(dbName).build())
+      }
+      //建表语句如果是CREATE TABLE target_table_identifier LIKE source_table_identifier USING xxxx形式时,不指定properties
+      val tableDesc = TableDescriptorBuilder.newBuilder(TableName.valueOf(s"$dbName:${table.identifier.table}"))
+      table.schema.map { filed =>
+        val separateName = HBaseSparkFormatUtils.splitColumnAndQualifierName(filed.name)
+        separateName.familyName
+      }.toSet.filter(_ != TABLE_CONSTANTS.ROW_KEY.getValue).foreach { familyName =>
+        val columnFamily = ColumnFamilyDescriptorBuilder.newBuilder(Bytes.toBytes(familyName))
         columnFamily.setBlockCacheEnabled(true)
-        columnFamily.setDataBlockEncoding(DataBlockEncoding.valueOf(en))
-        columnFamily.setCompressionType(Compression.Algorithm.valueOf(compression))
-        columnFamily.setBloomFilterType(BloomType.valueOf(bloom))
+        //TODO 从properties中读取DataBlockEncoding CompressionType 信息
         tableDesc.setColumnFamily(columnFamily.build())
+      }
+      //create table
+      if(exists) {
+        dropTable(dbName, table.identifier.table, ignoreIfExists, purge = false)
+      }
+      //当properties中指定了splitKey
+      if(table.properties.contains("splitKeys")){
+        val splitKeys = table.properties("splitKeys").split(",").map(Bytes.toBytes)
+        admin.createTable(tableDesc.build(),splitKeys)
+      }else{
+        admin.createTable(tableDesc.build())
+      }
+
+      //将schema信息写入到文件中
+      addTableSchema(table)
     }
-    val split = splitKeys.split(",").filter(_.nonEmpty).map(Bytes.toBytes)
-    //create table
-    admin.createTable(tableDesc.build(), split)
-    //将schema信息写入到文件中
-    saveSchemaProp(table)
   }
 
   /** Drop the specified table. */
@@ -379,6 +371,8 @@ class HBaseClientImpl(
     val name = TableName.valueOf(dbName + ":" + tableName)
     admin.disableTable(name)
     admin.deleteTable(name)
+    //从yaml文件中删除对应的Schema
+    dropTableSchema(dbName ,tableName)
   }
 
   /** Updates the given table with new metadata, optionally renaming the table. */

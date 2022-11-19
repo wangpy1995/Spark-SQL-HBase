@@ -1,8 +1,10 @@
 package org.apache.spark.sql.hbase
 
+import org.apache.hadoop.hbase.mapred.TableOutputFormat
+import org.apache.hadoop.hbase.mapreduce.TableInputFormat
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql._
-import org.apache.spark.sql.catalyst.catalog.{CatalogTable, UnresolvedCatalogRelation}
+import org.apache.spark.sql.catalyst.catalog.{CatalogStorageFormat, CatalogTable, UnresolvedCatalogRelation}
 import org.apache.spark.sql.catalyst.expressions.{And, Attribute, AttributeMap, AttributeReference, AttributeSet, Expression, GenericInternalRow, NamedExpression}
 import org.apache.spark.sql.catalyst.planning.PhysicalOperation
 import org.apache.spark.sql.catalyst.plans.logical.{InsertIntoStatement, LogicalPlan}
@@ -15,6 +17,8 @@ import org.apache.spark.sql.execution.datasources.v2.PushedDownOperators
 import org.apache.spark.sql.execution.datasources.{CreateTable, LogicalRelation}
 import org.apache.spark.sql.hbase.catalog.HBaseTableRelation
 import org.apache.spark.sql.hbase.execution.{CreateHBaseTableAsSelectCommand, HBaseTableFormat, HBaseTableScanExec, InsertIntoHBaseTable}
+import org.apache.spark.sql.hive.execution.HiveOptions
+import org.apache.spark.sql.internal.HiveSerDe
 import org.apache.spark.sql.sources.{Filter, PrunedFilteredScan}
 import org.apache.spark.sql.types.{DataType, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
@@ -251,9 +255,13 @@ object HBaseAnalysis extends Rule[LogicalPlan] {
       CreateHBaseTableAsSelectCommand(tableDesc, query, mode)
   }
 
+  def isHBaseTable(provider: Option[String]): Boolean = {
+    provider.isDefined && provider.get.toLowerCase(Locale.ROOT).contains("hbase")
+  }
+
   def isHBaseTable(table: CatalogTable): Boolean = {
     //TODO 特殊处理hbase表
-    table.provider.isDefined && table.provider.get.toLowerCase(Locale.ROOT).contains("hbase")
+    isHBaseTable(table.provider)
   }
 }
 
@@ -267,10 +275,62 @@ class ResolveHBaseTable(sparkSession: SparkSession) extends Rule[LogicalPlan] {
       table.partitionSchema.asNullable.toAttributes)
   }
 
+  def determineHBaseSerde(table: CatalogTable): CatalogTable = {
+    if (table.storage.serde.nonEmpty) {
+      table
+    } else {
+      if (table.bucketSpec.isDefined) {
+        throw new AnalysisException("Creating bucketed Hive serde table is not supported yet.")
+      }
+
+      val options = new HiveOptions(table.storage.properties)
+
+      val fileStorage = if (options.fileFormat.isDefined) {
+        HiveSerDe.sourceToSerDe(options.fileFormat.get) match {
+          case Some(s) =>
+            CatalogStorageFormat.empty.copy(
+              inputFormat = s.inputFormat,
+              outputFormat = s.outputFormat,
+              serde = s.serde)
+          case None =>
+            throw new IllegalArgumentException(s"invalid fileFormat: '${options.fileFormat.get}'")
+        }
+      } else if (options.hasInputOutputFormat) {
+        CatalogStorageFormat.empty.copy(
+          inputFormat = options.inputFormat,
+          outputFormat = options.outputFormat)
+      } else {
+        CatalogStorageFormat.empty
+      }
+
+      val rowStorage = if (options.serde.isDefined) {
+        CatalogStorageFormat.empty.copy(serde = options.serde)
+      } else {
+        CatalogStorageFormat.empty
+      }
+
+      val storage = table.storage.copy(
+        inputFormat = fileStorage.inputFormat.orElse(Some(classOf[TableInputFormat].getCanonicalName)),
+        outputFormat = fileStorage.outputFormat.orElse(Some(classOf[TableOutputFormat].getCanonicalName)),
+        serde = rowStorage.serde.orElse(fileStorage.serde).orElse(Some(classOf[HBaseTableFormat].getCanonicalName)),
+        properties = options.serdeProperties)
+
+      table.copy(storage = storage)
+    }
+  }
+
   override def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperators {
     case UnresolvedCatalogRelation(tableMeta, options, false)
       if HBaseAnalysis.isHBaseTable(tableMeta) =>
       readHBaseTable(tableMeta, options)
+
+    case c@CreateTable(t, _, query) if HBaseAnalysis.isHBaseTable(t) =>
+      val dbName = t.identifier.database.getOrElse(sparkSession.catalog.currentDatabase)
+      val table = t.copy(identifier = t.identifier.copy(database = Some(dbName)))
+      val withStorage = determineHBaseSerde(table)
+      val withSchema  = withStorage
+      c.copy(tableDesc = withSchema)
+
     case i@InsertIntoStatement(UnresolvedCatalogRelation(tableMeta, options, false),
     _, _, _, _, _) if HBaseAnalysis.isHBaseTable(tableMeta) =>
       i.copy(table = readHBaseTable(tableMeta, options))

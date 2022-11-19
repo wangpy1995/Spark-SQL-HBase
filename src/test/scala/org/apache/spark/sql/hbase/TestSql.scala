@@ -10,6 +10,7 @@ import org.apache.hadoop.mapred.JobConf
 import org.apache.hadoop.mapreduce.Job
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.sql.hbase.TConstants._
+import org.apache.spark.sql.hbase.execution.HBaseTableFormat
 import org.scalatest.funsuite.AnyFunSuite
 
 /**
@@ -54,18 +55,28 @@ class TestSql extends AnyFunSuite {
     hs.sql(s"select * from $TEST_NAMESPACE.$TEST_TABLE_NAME").show()
     hs.sql("select * from pw.test_insert").show()
     //table not found
-    hs.sql("select * from hbase.namespace").show()
+    hs.sql("select * from pw.test_create").show()
   }
 
-  test("select one col"){
+  test("select one col") {
     val regionInfo = hs.sql("select `info:regioninfo` from hbase.meta").cache()
     regionInfo.show()
     println(regionInfo.collect().mkString("Array(", ", ", ")"))
   }
 
-  test("insert one col"){
+  test("insert one col") {
     hs.sql("use pw").show()
     hs.sql("insert into test_insert  values('0000', 'TestSql')").show()
     hs.sql("select * from test_insert").show()
+  }
+
+  test("create table like") {
+    hs.sql("use pw").show()
+    hs.sql("drop table pw.test_create")
+    hs.sql(
+      s"""CREATE TABLE pw.test_create LIKE test_insert
+         |using ${classOf[HBaseTableFormat].getCanonicalName}""".stripMargin
+    ).show()
+    hs.sql("select * from pw.test_create").show()
   }
 }

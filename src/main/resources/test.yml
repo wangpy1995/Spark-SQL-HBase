@@ -1,52 +1,13 @@
-pw:test:
-  row_key: string
-  generator: org.apache.spark.sql.hbase.execution.DefaultRowKeyGenerator
-
-  A:A_00: string
-  A:A_01: string
-  A:A_02: string
-  A:A_03: string
-  A:A_04: string
-  A:A_05: string
-  A:A_06: string
-  A:A_07: string
-  A:A_08: string
-  A:A_09: string
-  B:B_00: string
-  B:B_01: string
-  B:B_02: string
-  B:B_03: string
-  B:B_04: string
-  B:B_05: string
-  B:B_06: string
-  B:B_07: string
-  B:B_08: string
-  B:B_09: string
-
-pw:test_insert:
-  row_key: string
-  generator: org.apache.spark.sql.hbase.execution.DefaultRowKeyGenerator
-
-  T:T_00: string
-
-hbase:meta:
-  row_key: string
-  generator: org.apache.spark.sql.hbase.execution.DefaultRowKeyGenerator
-
-  ns:d: string
-  table:state: short
-  rep_barrier:parent: string
-  rep_barrier:seqnumDuringOpen: long
-  info:regioninfo: RegionInfo
-  info:seqnumDuringOpen: long
-  info:server: string
-  info:serverstartcode: timestamp
-  info:sn: string
-  info:state: string
-
-# hbase3.x版本中已经废弃namespace表,相关信息现在直接写入到meta表的ns:d中
-#hbase:namespace:
-#  row_key: string
-#  generator: org.apache.spark.sql.hbase.execution.DefaultRowKeyGenerator
-#
-#  info:d: string
+pw:test: {row_key: string, generator: org.apache.spark.sql.hbase.execution.DefaultRowKeyGenerator,
+  'A:A_00': string, 'A:A_01': string, 'A:A_02': string, 'A:A_03': string, 'A:A_04': string,
+  'A:A_05': string, 'A:A_06': string, 'A:A_07': string, 'A:A_08': string, 'A:A_09': string,
+  'B:B_00': string, 'B:B_01': string, 'B:B_02': string, 'B:B_03': string, 'B:B_04': string,
+  'B:B_05': string, 'B:B_06': string, 'B:B_07': string, 'B:B_08': string, 'B:B_09': string}
+pw:test_insert: {row_key: string, generator: org.apache.spark.sql.hbase.execution.DefaultRowKeyGenerator,
+  'T:T_00': string}
+hbase:meta: {row_key: string, generator: org.apache.spark.sql.hbase.execution.DefaultRowKeyGenerator,
+  'ns:d': string, 'table:state': short, 'rep_barrier:parent': string, 'rep_barrier:seqnumDuringOpen': long,
+  'info:regioninfo': RegionInfo, 'info:seqnumDuringOpen': long, 'info:server': string,
+  'info:serverstartcode': timestamp, 'info:sn': string, 'info:state': string}
+pw:test_create: {row_key: string, generator: org.apache.spark.sql.hbase.execution.DefaultRowKeyGenerator,
+  'T:T_00': string}

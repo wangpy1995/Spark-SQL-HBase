@@ -1,7 +1,7 @@
 package org.apache.spark.sql.hbase
 
 import org.apache.spark.annotation.{Experimental, Stable}
-import org.apache.spark.sql.catalyst.analysis.{Analyzer, ResolveSessionCatalog}
+import org.apache.spark.sql.catalyst.analysis.{Analyzer, EvalSubqueriesForTimeTravel, ReplaceCharWithVarchar, ResolveSessionCatalog}
 import org.apache.spark.sql.catalyst.catalog.ExternalCatalogWithListener
 import org.apache.spark.sql.catalyst.parser.ParserInterface
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
@@ -15,6 +15,7 @@ import org.apache.spark.sql.execution.datasources._
 import org.apache.spark.sql.execution.datasources.v2.{DataSourceV2Strategy, TableCapabilityCheck}
 import org.apache.spark.sql.execution.streaming.ResolveWriteToStream
 import org.apache.spark.sql.hbase.execution.HBaseSqlParser
+import org.apache.spark.sql.hbase.execution.datasources.HBaseOnlyCheck
 import org.apache.spark.sql.internal.{BaseSessionStateBuilder, SessionState, SparkUDFExpressionBuilder}
 import org.apache.spark.sql.{SparkSession, Strategy}
 
@@ -60,6 +61,7 @@ class HBaseSessionStateBuilder(
         ResolveEncodersInScalaAgg +:
         new ResolveSessionCatalog(catalogManager) +:
         ResolveWriteToStream +:
+        new EvalSubqueriesForTimeTravel +:
         customResolutionRules
     }
 
@@ -69,6 +71,8 @@ class HBaseSessionStateBuilder(
         PreprocessTableInsertion +:
         HBaseAnalysis +:
         DataSourceAnalysis(this) +:
+        ApplyCharTypePadding +:
+        ReplaceCharWithVarchar +:
         customPostHocResolutionRules
 
     override val extendedCheckRules: Seq[LogicalPlan => Unit] =
