@@ -26,7 +26,8 @@ object HBaseSqlParser extends HBaseSqlParser
 
 class SparkHBaseSqlAstBuilder extends SparkSqlAstBuilder {
   override def visitPrimitiveDataType(ctx: PrimitiveDataTypeContext): DataType = withOrigin(ctx) {
-    val dataType = ctx.identifier.getText.toLowerCase(Locale.ROOT)
+
+    val dataType = ctx.`type`().identifier.getText.toLowerCase(Locale.ROOT)
     (dataType, ctx.INTEGER_VALUE().asScala.toList) match {
       case ("boolean", Nil) => BooleanType
       case ("tinyint" | "byte", Nil) => ByteType

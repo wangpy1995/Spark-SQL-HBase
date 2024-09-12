@@ -6,11 +6,13 @@ import org.apache.spark.sql.catalog.{Catalog, CatalogMetadata, Column, Database,
 import org.apache.spark.sql.catalyst.analysis.UnresolvedTable
 import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
+import org.apache.spark.sql.catalyst.expressions.AttributeReference
 import org.apache.spark.sql.catalyst.plans.logical.{LocalRelation, RecoverPartitions}
 import org.apache.spark.sql.catalyst.{DefinedByConstructorParams, FunctionIdentifier, TableIdentifier}
 import org.apache.spark.sql.connector.catalog.{NamespaceChange, SupportsNamespaces}
 import org.apache.spark.sql.errors.{QueryCompilationErrors, QueryExecutionErrors}
 import org.apache.spark.sql.execution.datasources.{CreateTable, DataSource}
+import org.apache.spark.sql.hbase.utils.StructFieldConverters.toAttributes
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import org.apache.spark.storage.StorageLevel
@@ -606,8 +608,23 @@ class HBaseCatalogImpl(hbaseSession: HBaseSession) extends Catalog with Supports
       name = name,
       description = null)
   }
-}
 
+  override def listDatabases(pattern: String): Dataset[Database] = {
+    listDatabases().filter(_.name.matches(pattern))
+  }
+
+  override def listTables(dbName: String, pattern: String): Dataset[Table] = {
+    listTables(dbName).filter(_.name.matches(pattern))
+  }
+
+  override def listFunctions(dbName: String, pattern: String): Dataset[Function] = {
+    listFunctions(dbName).filter(_.name.matches(pattern))
+  }
+
+  override def listCatalogs(pattern: String): Dataset[CatalogMetadata] = {
+    listCatalogs().filter(_.name.matches(pattern))
+  }
+}
 
 private[sql] object HBaseCatalogImpl {
 
@@ -617,6 +634,7 @@ private[sql] object HBaseCatalogImpl {
     val enc = ExpressionEncoder[T]()
     val serializer = enc.createSerializer()
     val encoded = data.map(d => serializer(d).copy())
+
     val plan = new LocalRelation(enc.schema.toAttributes, encoded)
     val queryExecution = sparkSession.sessionState.executePlan(plan)
     new Dataset[T](queryExecution, enc)

@@ -215,7 +215,7 @@ class HBaseClientImpl(
     if (databaseExists(name))
       CatalogDatabase(name, name + " description", new URI(conf.get("hbase.rootdit") + s"/data/$name"), Map.empty)
     else
-      throw NoSuchDatabaseException(name)
+      throw new NoSuchElementException(name)
   }
 
   /** Return whether a table/view with the specified name exists. */

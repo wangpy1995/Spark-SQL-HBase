@@ -14,7 +14,8 @@ import org.apache.spark.sql.execution.datasources.DataSourceStrategy.selectFilte
 import org.apache.spark.sql.execution.datasources.v2.PushedDownOperators
 import org.apache.spark.sql.execution.datasources.{CreateTable, LogicalRelation}
 import org.apache.spark.sql.hbase.catalog.HBaseTableRelation
-import org.apache.spark.sql.hbase.execution.{CreateHBaseTableAsSelectCommand, HBaseTableFormat, HBaseTableScanExec, InsertIntoHBaseTable}
+import org.apache.spark.sql.hbase.execution.{CreateHBaseTableAsSelectCommand, HBaseTableScanExec, InsertIntoHBaseTable}
+import org.apache.spark.sql.hbase.utils.StructFieldConverters._
 import org.apache.spark.sql.sources.{Filter, PrunedFilteredScan}
 import org.apache.spark.sql.types.{DataType, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
@@ -138,8 +139,9 @@ private[hbase] trait HBaseStrategies {
           }
           pairs += ("PushedFilters" -> markedFilters.mkString("[", ", ", "]"))
         }
+        // TODO 需要支持不带meta信息的普通Attribute
         pairs += ("ReadSchema" ->
-          StructType.fromAttributes(projects.map(_.toAttribute)).catalogString)
+          StructType(projects.map(_.toAttribute.asInstanceOf[AttributeReference].fromAttribute)).catalogString)
         pairs.toMap
       }
 
@@ -159,7 +161,7 @@ private[hbase] trait HBaseStrategies {
 
         val scan = RowDataSourceScanExec(
           projects.map(_.toAttribute),
-          StructType.fromAttributes(projects.map(_.toAttribute)),
+          StructType(projects.map(_.toAttribute.asInstanceOf[AttributeReference].fromAttribute)),
           pushedFilters.toSet,
           pushedFilters.toSet,
           PushedDownOperators(None, None, None, None, Seq.empty, Seq.empty),
@@ -174,7 +176,7 @@ private[hbase] trait HBaseStrategies {
 
         val scan = RowDataSourceScanExec(
           requestedColumns,
-          StructType.fromAttributes(requestedColumns),
+          StructType(requestedColumns.fromAttributes),
           pushedFilters.toSet,
           pushedFilters.toSet,
           PushedDownOperators(None, None, None, None, Seq.empty, Seq.empty),
@@ -240,7 +242,7 @@ private[hbase] trait HBaseStrategies {
  */
 object HBaseAnalysis extends Rule[LogicalPlan] {
   override def apply(plan: LogicalPlan): LogicalPlan = plan transformUp {
-    case InsertIntoStatement(plan: HBasePlan, _, _, query, overwrite, ifNotExists)
+    case InsertIntoStatement(plan: HBasePlan, _, _, query, overwrite, ifNotExists, _)
       if isHBaseTable(plan.tableMeta) =>
       InsertIntoHBaseTable(plan.tableMeta, query, overwrite, ifNotExists)
 
@@ -272,7 +274,7 @@ class ResolveHBaseTable(sparkSession: SparkSession) extends Rule[LogicalPlan] {
       if HBaseAnalysis.isHBaseTable(tableMeta) =>
       readHBaseTable(tableMeta, options)
     case i@InsertIntoStatement(UnresolvedCatalogRelation(tableMeta, options, false),
-    _, _, _, _, _) if HBaseAnalysis.isHBaseTable(tableMeta) =>
+    _, _, _, _, _, _) if HBaseAnalysis.isHBaseTable(tableMeta) =>
       i.copy(table = readHBaseTable(tableMeta, options))
   }
 }

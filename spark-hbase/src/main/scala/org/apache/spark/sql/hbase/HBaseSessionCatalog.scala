@@ -10,6 +10,7 @@ import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, Project, Subque
 import org.apache.spark.sql.internal.SQLConf
 
 import java.util.Locale
+import org.apache.spark.sql.hbase.utils.StructFieldConverters._
 
 /**
  * Created by wpy on 17-5-17.

@@ -2,7 +2,7 @@ package org.apache.spark.sql.hbase.execution
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileStatus, FileSystem, Path}
-import org.apache.hadoop.hbase.{Cell, CellBuilderType, HBaseConfiguration}
+import org.apache.hadoop.hbase.{Cell, CellBuilderFactory, CellBuilderType, HBaseConfiguration}
 import org.apache.hadoop.hbase.client.{Mutation, Put}
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable
 import org.apache.hadoop.hbase.io.hfile.{HFile, HFileScanner}
@@ -101,7 +101,7 @@ class HBaseFileFormat
         var seeked = false
         val broadcastConfValue: Configuration = broadcastedHadoopConf.value.value
         val fs: FileSystem = FileSystem.get(broadcastConfValue)
-        val hFileReader: HFile.Reader = HFile.createReader(fs, new Path(hfile.filePath), broadcastedHadoopConf.value.value)
+        val hFileReader: HFile.Reader = HFile.createReader(fs, new Path(hfile.filePath.toUri), broadcastedHadoopConf.value.value)
         val scanner: HFileScanner = hFileReader.getScanner(broadcastConfValue, false, false)
         var hashNextValue: Boolean = false
 
@@ -224,7 +224,7 @@ class HBaseOutputWriter(context: TaskAttemptContext, dataSchema: StructType) ext
       val rowKey = rowKeyConverter(row, rowKeyIdx)
       val put = new Put(rowKey)
       filteredDataSchema.foreach { field =>
-        val cellBuilder = put.getCellBuilder(CellBuilderType.SHALLOW_COPY)
+        val cellBuilder = CellBuilderFactory.create(CellBuilderType.SHALLOW_COPY)
         val (family, qualifier, idx, converter) = schemaMap(field.name)
         cellBuilder.setFamily(family)
         cellBuilder.setQualifier(qualifier)
